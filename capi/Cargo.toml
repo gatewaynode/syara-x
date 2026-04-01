@@ -1,0 +1,15 @@
+[package]
+name = "syara-x-capi"
+description = "C API for syara-x"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+syara-x = { workspace = true }
+
+[build-dependencies]
+cbindgen = "0.26.0"
