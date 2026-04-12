@@ -131,6 +131,11 @@ impl WordChunker {
 
 impl Chunker for WordChunker {
     fn chunk(&self, text: &str) -> Vec<String> {
+        // BUG-027: `slice::chunks(0)` panics — treat 0 as "no chunking".
+        if self.chunk_size == 0 {
+            return vec![text.to_owned()];
+        }
+
         let words: Vec<&str> = text.split_whitespace().collect();
         if words.is_empty() {
             return vec![text.to_owned()];
@@ -144,5 +149,33 @@ impl Chunker for WordChunker {
 
     fn name(&self) -> &str {
         "word_chunking"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn word_chunker_zero_chunk_size_returns_whole_text() {
+        // BUG-027: chunk_size == 0 must not panic.
+        let chunker = WordChunker::new(0);
+        let result = chunker.chunk("hello world foo bar");
+        assert_eq!(result, vec!["hello world foo bar"]);
+    }
+
+    #[test]
+    fn word_chunker_normal_chunking() {
+        let chunker = WordChunker::new(2);
+        let result = chunker.chunk("a b c d e");
+        assert_eq!(result, vec!["a b", "c d", "e"]);
+    }
+
+    #[test]
+    fn fixed_size_chunker_with_overlap() {
+        let chunker = FixedSizeChunker::new(3, 1);
+        let result = chunker.chunk("a b c d e");
+        // step = 3 - 1 = 2: [a,b,c], [c,d,e], [e]
+        assert_eq!(result, vec!["a b c", "c d e", "e"]);
     }
 }

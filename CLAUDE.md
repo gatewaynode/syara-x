@@ -119,6 +119,7 @@ Data flows linearly: `.syara file` → `SyaraParser` → `Vec<Rule>` → `Compil
 - Point at logs, errors, failing tests - then resolve them
 - Zero context switching required from the user
 - Go fix failing CI tests without being told how
+- Bugs always need to be confirmed fixed with existing unit tests or new tests created to capture the success or failure of the bug fix.
 
 ## Task Management
 
@@ -150,3 +151,7 @@ Data flows linearly: `.syara file` → `SyaraParser` → `Vec<Rule>` → `Compil
 - **Never Use Latest Dependencies**: Try to keep to N - 1, and never use packages that are less than 30 days old.
 - **Pin Dependencies**: Always pin versions in `Cargo.toml`; commit `Cargo.lock`.
 - **Thoroughly Review Everything**: Run security reviews, style reviews, architecture reviews and run tests regularly.
+
+## MCP Tools
+
+- **tilth**: Smarter code reading for Agents

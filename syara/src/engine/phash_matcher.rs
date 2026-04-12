@@ -73,6 +73,9 @@ impl ImageHashMatcher {
     pub fn new(hash_size: u32) -> Self {
         Self { hash_size }
     }
+
+    /// Maximum hash_size that fits in a 64-bit hash (8×8 = 64 bits).
+    const MAX_HASH_SIZE: u32 = 8;
 }
 
 impl Default for ImageHashMatcher {
@@ -83,6 +86,15 @@ impl Default for ImageHashMatcher {
 
 impl PHashMatcher for ImageHashMatcher {
     fn compute_hash(&self, file_path: &Path) -> Result<u64, SyaraError> {
+        // BUG-003: hash_size > 8 causes bit shift overflow (8×8 = 64 bits max)
+        if self.hash_size > Self::MAX_HASH_SIZE {
+            return Err(SyaraError::PhashError(format!(
+                "hash_size {} exceeds maximum of {} (64-bit hash limit)",
+                self.hash_size,
+                Self::MAX_HASH_SIZE,
+            )));
+        }
+
         let img = image::open(file_path)
             .map_err(|e| SyaraError::PhashError(e.to_string()))?
             .into_luma8();
@@ -137,8 +149,12 @@ impl PHashMatcher for AudioHashMatcher {
             return Err(SyaraError::PhashError("not a valid WAV file".into()));
         }
 
+        // BUG-015: maximum allocation for any single WAV chunk
+        const MAX_CHUNK_ALLOC: u64 = 256 * 1024 * 1024; // 256 MB
+
         // Scan chunks for fmt + data
         let mut sample_width: u64 = 2; // bytes per sample (default 16-bit)
+        let mut n_channels: u64 = 1; // BUG-014: track channel count
         let mut data_offset: u64 = 0;
         let mut n_frames: u64 = 0;
 
@@ -151,22 +167,45 @@ impl PHashMatcher for AudioHashMatcher {
             let chunk_len = u32::from_le_bytes(sz) as u64;
 
             if &id == b"fmt " {
+                // BUG-015: reject oversized fmt chunks
+                if chunk_len > MAX_CHUNK_ALLOC {
+                    return Err(SyaraError::PhashError(format!(
+                        "WAV fmt chunk too large: {chunk_len} bytes"
+                    )));
+                }
                 let mut fmt = vec![0u8; chunk_len as usize];
                 f.read_exact(&mut fmt)
                     .map_err(|e| SyaraError::PhashError(e.to_string()))?;
-                // bits_per_sample at offset 14 in fmt chunk body
                 if fmt.len() >= 16 {
+                    // BUG-014: num_channels at offset 2 in fmt chunk body
+                    n_channels = u16::from_le_bytes([fmt[2], fmt[3]]).max(1) as u64;
+                    // bits_per_sample at offset 14
                     let bits = u16::from_le_bytes([fmt[14], fmt[15]]);
                     sample_width = (bits / 8).max(1) as u64;
                 }
+                // BUG-029: RIFF chunks are padded to even byte boundaries
+                if !chunk_len.is_multiple_of(2) {
+                    f.seek(SeekFrom::Current(1))
+                        .map_err(|e| SyaraError::PhashError(e.to_string()))?;
+                }
             } else if &id == b"data" {
+                // BUG-015: reject oversized data chunks
+                if chunk_len > MAX_CHUNK_ALLOC {
+                    return Err(SyaraError::PhashError(format!(
+                        "WAV data chunk too large: {chunk_len} bytes"
+                    )));
+                }
                 data_offset = f
                     .stream_position()
                     .map_err(|e| SyaraError::PhashError(e.to_string()))?;
-                n_frames = chunk_len / sample_width.max(1);
+                // BUG-014: divide by frame size (channels × sample_width)
+                let frame_size = n_channels * sample_width.max(1);
+                n_frames = chunk_len / frame_size;
                 break;
             } else {
-                f.seek(SeekFrom::Current(chunk_len as i64))
+                // BUG-029: seek past chunk + pad byte for odd-length chunks
+                let seek_len = chunk_len + (chunk_len % 2);
+                f.seek(SeekFrom::Current(seek_len as i64))
                     .map_err(|e| SyaraError::PhashError(e.to_string()))?;
             }
         }
@@ -178,11 +217,13 @@ impl PHashMatcher for AudioHashMatcher {
         // Sample 65 evenly-spaced frames
         let n_samples: u64 = 65;
         let step = (n_frames / n_samples).max(1);
+        let frame_size = n_channels * sample_width;
         let mut samples: Vec<i32> = Vec::with_capacity(n_samples as usize);
 
         for i in 0..n_samples {
             let pos = (i * step).min(n_frames - 1);
-            f.seek(SeekFrom::Start(data_offset + pos * sample_width))
+            // BUG-014: seek by frame_size to account for multi-channel audio
+            f.seek(SeekFrom::Start(data_offset + pos * frame_size))
                 .map_err(|e| SyaraError::PhashError(e.to_string()))?;
             let mut raw = vec![0u8; sample_width as usize];
             let val = if f.read_exact(&mut raw).is_ok() {
@@ -399,6 +440,118 @@ mod tests {
         assert_eq!(hash, 0);
     }
 
+    // ── BUG-003: hash_size > 8 returns error ──────────────────────────────
+
+    #[test]
+    fn image_hash_size_9_returns_error() {
+        let m = ImageHashMatcher::new(9);
+        let f = temp_file(b"fake image");
+        let result = m.compute_hash(f.path());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("hash_size"), "error should mention hash_size: {msg}");
+    }
+
+    #[test]
+    fn image_hash_size_8_is_valid() {
+        // hash_size = 8 is the default and must be accepted (no error from validation)
+        let m = ImageHashMatcher::new(8);
+        assert_eq!(m.hash_size, ImageHashMatcher::MAX_HASH_SIZE);
+    }
+
+    // ── BUG-014: stereo WAV frame count ─────────────────────────────────────
+
+    #[test]
+    fn audio_hash_stereo_correct_frame_count() {
+        // Stereo WAV: 65 frames × 2 channels = 130 samples
+        let mono_samples = sawtooth_samples(65);
+        let stereo_samples: Vec<i16> = mono_samples
+            .iter()
+            .flat_map(|&s| [s, s]) // duplicate for L+R
+            .collect();
+
+        let mono_wav = minimal_wav_channels(44100, 1, &mono_samples);
+        let stereo_wav = minimal_wav_channels(44100, 2, &stereo_samples);
+
+        let f_mono = temp_file(&mono_wav);
+        let f_stereo = temp_file(&stereo_wav);
+
+        let h_mono = AudioHashMatcher.compute_hash(f_mono.path()).unwrap();
+        let h_stereo = AudioHashMatcher.compute_hash(f_stereo.path()).unwrap();
+
+        // With identical left-channel content, hashes should be equal
+        assert_eq!(h_mono, h_stereo);
+    }
+
+    // ── BUG-015: oversized WAV chunk rejected ───────────────────────────────
+
+    #[test]
+    fn audio_hash_oversized_data_chunk_returns_error() {
+        // Craft a WAV with a data chunk_len claiming 512MB
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&0u32.to_le_bytes()); // file size (don't care)
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&44100u32.to_le_bytes());
+        wav.extend_from_slice(&(44100u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(512 * 1024 * 1024u32).to_le_bytes()); // 512 MB
+
+        let f = temp_file(&wav);
+        let result = AudioHashMatcher.compute_hash(f.path());
+        assert!(result.is_err(), "oversized data chunk must be rejected");
+    }
+
+    // ── BUG-029: odd-sized chunk padding ────────────────────────────────────
+
+    #[test]
+    fn audio_hash_odd_chunk_padding() {
+        // Build WAV with an odd-length unknown chunk before the data chunk.
+        // The parser must skip the padding byte to find the data chunk.
+        let samples = sawtooth_samples(65);
+        let data_len = (samples.len() * 2) as u32;
+
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&0u32.to_le_bytes()); // placeholder
+        wav.extend_from_slice(b"WAVE");
+        // fmt chunk
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&44100u32.to_le_bytes());
+        wav.extend_from_slice(&(44100u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        // Unknown chunk with odd length (3 bytes + 1 padding)
+        wav.extend_from_slice(b"LIST");
+        wav.extend_from_slice(&3u32.to_le_bytes()); // 3 bytes = odd
+        wav.extend_from_slice(&[0xAA, 0xBB, 0xCC]); // body
+        wav.push(0x00); // RIFF padding byte
+        // data chunk
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        for &s in &samples {
+            wav.extend_from_slice(&s.to_le_bytes());
+        }
+        // Fix RIFF file size
+        let file_len = (wav.len() - 8) as u32;
+        wav[4..8].copy_from_slice(&file_len.to_le_bytes());
+
+        let f = temp_file(&wav);
+        let result = AudioHashMatcher.compute_hash(f.path());
+        assert!(result.is_ok(), "must parse WAV with odd-sized chunks: {result:?}");
+        // Verify it produces a non-zero hash (65 sawtooth samples)
+        assert_ne!(result.unwrap(), 0);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /// Write `data` to a named temporary file; returns the guard.
@@ -410,8 +563,15 @@ mod tests {
 
     /// Build a minimal valid PCM WAV byte vector with 16-bit mono samples.
     fn minimal_wav(sample_rate: u32, samples: &[i16]) -> Vec<u8> {
+        minimal_wav_channels(sample_rate, 1, samples)
+    }
+
+    /// Build a valid PCM WAV byte vector with configurable channel count.
+    fn minimal_wav_channels(sample_rate: u32, channels: u16, samples: &[i16]) -> Vec<u8> {
         let data_len = (samples.len() * 2) as u32;
         let file_len = 36 + data_len;
+        let block_align = channels * 2; // 16-bit per channel
+        let byte_rate = sample_rate * block_align as u32;
 
         let mut v: Vec<u8> = Vec::with_capacity(file_len as usize + 8);
         // RIFF header
@@ -422,10 +582,10 @@ mod tests {
         v.extend_from_slice(b"fmt ");
         v.extend_from_slice(&16u32.to_le_bytes());
         v.extend_from_slice(&1u16.to_le_bytes()); // PCM
-        v.extend_from_slice(&1u16.to_le_bytes()); // mono
+        v.extend_from_slice(&channels.to_le_bytes());
         v.extend_from_slice(&sample_rate.to_le_bytes());
-        v.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
-        v.extend_from_slice(&2u16.to_le_bytes()); // block align
+        v.extend_from_slice(&byte_rate.to_le_bytes());
+        v.extend_from_slice(&block_align.to_le_bytes());
         v.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
         // data chunk
         v.extend_from_slice(b"data");

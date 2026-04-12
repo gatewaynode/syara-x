@@ -86,68 +86,29 @@ pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
 /// Calls an Ollama-compatible `/api/embed` HTTP endpoint.
 ///
-/// ```text
-/// POST <endpoint>
-/// {"model": "<model>", "input": "<text>"}
-///
-/// {"embeddings": [[f32, ...]]}
-/// ```
+/// Delegates to the shared [`super::HttpEmbedder`] which provides timeouts
+/// (BUG-011) and embedding caching (BUG-033).
 ///
 /// The `endpoint` and `model` can be changed at registration time via
 /// [`HttpEmbeddingMatcher::new`].  Default registration uses
 /// `http://localhost:11434/api/embed` with model `all-minilm`.
 pub struct HttpEmbeddingMatcher {
-    endpoint: String,
-    model: String,
-    client: reqwest::blocking::Client,
+    embedder: super::HttpEmbedder,
 }
 
 impl HttpEmbeddingMatcher {
     pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
-            endpoint: endpoint.into(),
-            model: model.into(),
-            client: reqwest::blocking::Client::new(),
+            embedder: super::HttpEmbedder::new(endpoint, model),
         }
     }
 }
 
 impl SemanticMatcher for HttpEmbeddingMatcher {
     fn embed(&self, text: &str) -> Result<Vec<f32>, SyaraError> {
-        if text.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let body = serde_json::json!({
-            "model": self.model,
-            "input": text
-        });
-
-        let resp = self
-            .client
-            .post(&self.endpoint)
-            .json(&body)
-            .send()
-            .map_err(|e| SyaraError::SemanticError(e.to_string()))?;
-
-        let json: serde_json::Value = resp
-            .json()
-            .map_err(|e| SyaraError::SemanticError(e.to_string()))?;
-
-        let embedding = json
-            .get("embeddings")
-            .and_then(|v| v.get(0))
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                SyaraError::SemanticError(
-                    "unexpected response: missing embeddings[0]".into(),
-                )
-            })?
-            .iter()
-            .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-            .collect();
-
-        Ok(embedding)
+        self.embedder
+            .embed(text)
+            .map_err(SyaraError::SemanticError)
     }
 }
 

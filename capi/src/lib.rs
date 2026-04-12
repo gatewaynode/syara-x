@@ -69,6 +69,8 @@ pub struct SyaraMatchArray {
     pub matches: *mut SyaraMatch,
     /// Number of elements in `matches`.
     pub count: usize,
+    /// Capacity of the backing allocation (BUG-018).
+    capacity: usize,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -88,14 +90,15 @@ fn into_c_array(matches: Vec<syara_x::Match>) -> *mut SyaraMatchArray {
         })
         .collect();
 
-    c_matches.shrink_to_fit();
     let count = c_matches.len();
+    let capacity = c_matches.capacity();
     let matches_ptr = c_matches.as_mut_ptr();
     std::mem::forget(c_matches);
 
     Box::into_raw(Box::new(SyaraMatchArray {
         matches: matches_ptr,
         count,
+        capacity,
     }))
 }
 
@@ -118,6 +121,8 @@ pub unsafe extern "C" fn syara_compile_str(
         set_last_error("null pointer argument");
         return SyaraStatus::SyaraErrNullPtr;
     }
+    // BUG-030: null-init *out so callers see null on error paths.
+    unsafe { *out = std::ptr::null_mut() };
     let src_str = match unsafe { CStr::from_ptr(src) }.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -154,6 +159,8 @@ pub unsafe extern "C" fn syara_compile_file(
         set_last_error("null pointer argument");
         return SyaraStatus::SyaraErrNullPtr;
     }
+    // BUG-030: null-init *out so callers see null on error paths.
+    unsafe { *out = std::ptr::null_mut() };
     let path_str = match unsafe { CStr::from_ptr(path) }.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -192,6 +199,8 @@ pub unsafe extern "C" fn syara_scan(
         set_last_error("null pointer argument");
         return SyaraStatus::SyaraErrNullPtr;
     }
+    // BUG-030: null-init *out so callers see null on error paths.
+    unsafe { *out = std::ptr::null_mut() };
     let text_str = match unsafe { CStr::from_ptr(text) }.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -224,6 +233,8 @@ pub unsafe extern "C" fn syara_scan_file(
         set_last_error("null pointer argument");
         return SyaraStatus::SyaraErrNullPtr;
     }
+    // BUG-030: null-init *out so callers see null on error paths.
+    unsafe { *out = std::ptr::null_mut() };
     let path_str = match unsafe { CStr::from_ptr(path) }.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -286,8 +297,8 @@ pub unsafe extern "C" fn syara_matches_free(matches: *mut SyaraMatchArray) {
                 drop(CString::from_raw(m.rule_name));
             }
         }
-        // Reclaim and drop the matches Vec.
-        drop(Vec::from_raw_parts(array.matches, array.count, array.count));
+        // BUG-018: use stored capacity instead of assuming count == capacity.
+        drop(Vec::from_raw_parts(array.matches, array.count, array.capacity));
         // array (the Box) is dropped here.
     }
 }
@@ -434,5 +445,39 @@ rule miss_rule {
         let status = unsafe { syara_compile_file(path.as_ptr(), &mut ptr) };
         assert!(matches!(status, SyaraStatus::SyaraErrCompile));
         assert!(ptr.is_null());
+    }
+
+    // ── BUG-018: SyaraMatchArray stores correct capacity ──────────────────
+
+    #[test]
+    fn match_array_capacity_roundtrips() {
+        // BUG-018: capacity must be stored and used for deallocation.
+        let rules = compile(RULE_SRC);
+        let text = CString::new("hello world").unwrap();
+        let mut out: *mut SyaraMatchArray = std::ptr::null_mut();
+
+        let status = unsafe { syara_scan(rules, text.as_ptr(), &mut out) };
+        assert!(matches!(status, SyaraStatus::SyaraOk));
+
+        unsafe {
+            let array = &*out;
+            // Capacity must be >= count.
+            assert!(array.capacity >= array.count);
+            // Free must not crash (would UB with wrong capacity).
+            syara_matches_free(out);
+            syara_rules_free(rules);
+        }
+    }
+
+    // ── BUG-030: *out is null on compile error ────────────────────────────
+
+    #[test]
+    fn compile_error_nulls_out_ptr() {
+        // BUG-030: *out must be null after a compile error, not garbage.
+        let bad_src = CString::new("rule broken { condition: @invalid }").unwrap();
+        let mut ptr: *mut SyaraRules = 0x1 as *mut SyaraRules; // start non-null
+        let status = unsafe { syara_compile_str(bad_src.as_ptr(), &mut ptr) };
+        assert!(!matches!(status, SyaraStatus::SyaraOk));
+        assert!(ptr.is_null(), "*out must be null on error");
     }
 }

@@ -68,6 +68,10 @@ typedef struct SyaraMatchArray {
      * Number of elements in `matches`.
      */
     uintptr_t count;
+    /**
+     * Capacity of the backing allocation (BUG-018).
+     */
+    uintptr_t capacity;
 } SyaraMatchArray;
 
 /**

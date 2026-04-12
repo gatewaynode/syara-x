@@ -47,6 +47,7 @@ enum Token {
     RParen,
     Comma,
     Star,
+    Unknown(char), // BUG-022: unrecognized characters
     Eof,
 }
 
@@ -103,11 +104,9 @@ impl<'a> Tokenizer<'a> {
                 Token::Keyword(word)
             }
             Some(c) => {
-                // skip unknown character
+                // BUG-022: produce Unknown token instead of silently treating as keyword
                 self.advance();
-                let mut s = String::new();
-                s.push(c);
-                Token::Keyword(s)
+                Token::Unknown(c)
             }
         }
     }
@@ -301,6 +300,12 @@ impl Parser {
 pub fn parse(condition: &str) -> Result<Expr, SyaraError> {
     let mut parser = Parser::new(condition);
     let expr = parser.parse_expr()?;
+    if *parser.peek() != Token::Eof {
+        return Err(SyaraError::ConditionParse(format!(
+            "unexpected trailing token {:?}",
+            parser.peek()
+        )));
+    }
     Ok(expr)
 }
 
@@ -337,31 +342,74 @@ pub fn evaluate(
 
 fn resolve_set(set: &SetExpr, matches: &HashMap<String, Vec<MatchDetail>>) -> Vec<String> {
     match set {
-        SetExpr::Them => matches.keys().cloned().collect(),
+        SetExpr::Them => {
+            // BUG-034: sort for deterministic evaluation and debug output.
+            let mut keys: Vec<String> = matches.keys().cloned().collect();
+            keys.sort();
+            keys
+        }
         SetExpr::Explicit(ids) => ids.clone(),
         SetExpr::Wildcard(prefix) => {
             let full_prefix = format!("${}", prefix);
-            matches
+            let mut keys: Vec<String> = matches
                 .keys()
                 .filter(|k| k.starts_with(&full_prefix))
                 .cloned()
-                .collect()
+                .collect();
+            keys.sort();
+            keys
         }
     }
 }
 
 /// Optimistic short-circuit: would the condition be true if `identifier` matched?
 /// Used to skip expensive LLM calls when they cannot change the outcome.
+///
+/// Evaluates hypothetically without cloning the full match map — checks
+/// whether adding `identifier` as matched would make the condition true.
 pub fn is_identifier_needed(
     identifier: &str,
     expr: &Expr,
     current_matches: &HashMap<String, Vec<MatchDetail>>,
 ) -> bool {
-    let mut test = current_matches.clone();
-    test.entry(identifier.to_owned())
-        .or_default()
-        .push(MatchDetail::new(identifier, ""));
-    evaluate(expr, &test)
+    evaluate_hypothetical(expr, current_matches, identifier)
+}
+
+/// Evaluate as if `extra_id` were matched, without cloning the map.
+fn evaluate_hypothetical(
+    expr: &Expr,
+    matches: &HashMap<String, Vec<MatchDetail>>,
+    extra_id: &str,
+) -> bool {
+    match expr {
+        Expr::Identifier(id) => {
+            id == extra_id || matches.get(id).map(|v| !v.is_empty()).unwrap_or(false)
+        }
+        Expr::Not(inner) => !evaluate_hypothetical(inner, matches, extra_id),
+        Expr::And(l, r) => {
+            evaluate_hypothetical(l, matches, extra_id)
+                && evaluate_hypothetical(r, matches, extra_id)
+        }
+        Expr::Or(l, r) => {
+            evaluate_hypothetical(l, matches, extra_id)
+                || evaluate_hypothetical(r, matches, extra_id)
+        }
+        Expr::AnyOf(set) => {
+            let ids = resolve_set(set, matches);
+            ids.iter().any(|id| {
+                id == extra_id || matches.get(id).map(|v| !v.is_empty()).unwrap_or(false)
+            })
+        }
+        Expr::AllOf(set) => {
+            let ids = resolve_set(set, matches);
+            if ids.is_empty() {
+                return false;
+            }
+            ids.iter().all(|id| {
+                id == extra_id || matches.get(id).map(|v| !v.is_empty()).unwrap_or(false)
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -451,5 +499,173 @@ mod tests {
         let expr = parse("$s1 and ($s2 or $s3)").unwrap();
         assert!(!evaluate(&expr, &hit("$s1")));
         assert!(evaluate(&expr, &hits(&["$s1", "$s3"])));
+    }
+
+    // ── BUG-006: trailing tokens must produce an error ──────────────────────
+
+    #[test]
+    fn test_trailing_tokens_error() {
+        // "$s1 $s2" is missing an operator — should not silently ignore $s2
+        let result = parse("$s1 $s2");
+        assert!(result.is_err(), "trailing token $s2 should cause parse error");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("trailing token"), "error should mention trailing: {msg}");
+    }
+
+    #[test]
+    fn test_trailing_keyword_error() {
+        let result = parse("$s1 and $s2 not");
+        assert!(result.is_err(), "trailing 'not' should cause parse error");
+    }
+
+    #[test]
+    fn test_trailing_paren_error() {
+        let result = parse("$s1 and $s2)");
+        assert!(result.is_err(), "unmatched ')' should cause parse error");
+    }
+
+    // ── BUG-007: hypothetical evaluation without cloning ────────────────────
+
+    #[test]
+    fn test_is_identifier_needed_returns_true() {
+        // condition: $s1 and $llm1
+        // $s1 matched, $llm1 not yet — adding $llm1 would make it true
+        let expr = parse("$s1 and $llm1").unwrap();
+        let m = hit("$s1");
+        assert!(is_identifier_needed("$llm1", &expr, &m));
+    }
+
+    #[test]
+    fn test_is_identifier_needed_returns_false() {
+        // condition: $s1 and $s2 and $llm1
+        // only $s1 matched — even if $llm1 matches, $s2 is still missing
+        let expr = parse("$s1 and $s2 and $llm1").unwrap();
+        let m = hit("$s1");
+        assert!(!is_identifier_needed("$llm1", &expr, &m));
+    }
+
+    #[test]
+    fn test_is_identifier_needed_or_branch() {
+        // condition: $s1 or $llm1
+        // $s1 already matched — $llm1 not needed (condition already true)
+        // But the function checks "would condition be true WITH $llm1?"
+        // which is still true — so it returns true. The caller decides to skip
+        // only if `!is_identifier_needed`.
+        let expr = parse("$s1 or $llm1").unwrap();
+        let m = hit("$s1");
+        // with $s1 already matched, adding $llm1 still yields true
+        assert!(is_identifier_needed("$llm1", &expr, &m));
+    }
+
+    #[test]
+    fn test_is_identifier_needed_negated() {
+        // condition: not $llm1
+        // With $llm1 hypothetically matched, `not $llm1` is false
+        let expr = parse("not $llm1").unwrap();
+        assert!(!is_identifier_needed("$llm1", &expr, &empty()));
+    }
+
+    // ── Additional condition coverage ───────────────────────────────────────
+
+    #[test]
+    fn test_explicit_set() {
+        let expr = parse("any of ($s1, $s2)").unwrap();
+        assert!(evaluate(&expr, &hit("$s2")));
+        assert!(!evaluate(&expr, &hit("$s3")));
+    }
+
+    #[test]
+    fn test_all_of_explicit_set() {
+        let expr = parse("all of ($s1, $s2)").unwrap();
+        assert!(!evaluate(&expr, &hit("$s1")));
+        assert!(evaluate(&expr, &hits(&["$s1", "$s2"])));
+    }
+
+    #[test]
+    fn test_all_of_empty_is_false() {
+        // `all of them` with no identifiers at all → false
+        let expr = parse("all of them").unwrap();
+        assert!(!evaluate(&expr, &empty()));
+    }
+
+    #[test]
+    fn test_operator_precedence() {
+        // `and` binds tighter than `or`:
+        // $s1 or $s2 and $s3  ⟹  $s1 or ($s2 and $s3)
+        let expr = parse("$s1 or $s2 and $s3").unwrap();
+        // only $s1 → true via OR
+        assert!(evaluate(&expr, &hit("$s1")));
+        // only $s2 → false (needs $s3 for the AND branch)
+        assert!(!evaluate(&expr, &hit("$s2")));
+        // $s2 + $s3 → true via AND branch
+        assert!(evaluate(&expr, &hits(&["$s2", "$s3"])));
+    }
+
+    #[test]
+    fn test_double_not_is_parse_error() {
+        // Grammar: not_expr = 'not' primary | primary
+        // "not not $s1" is not valid — `not` is not a primary expression
+        let result = parse("not not $s1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_not_with_parens() {
+        // `not not $s1` is invalid, but `not (not $s1)` works via paren grouping
+        let expr = parse("not (not $s1)").unwrap();
+        // Double negation: equivalent to $s1
+        assert!(!evaluate(&expr, &empty()));
+        assert!(evaluate(&expr, &hit("$s1")));
+    }
+
+    #[test]
+    fn test_empty_input_error() {
+        let result = parse("");
+        assert!(result.is_err());
+    }
+
+    // ── BUG-022: unknown chars must produce parse error ──────────────────────
+
+    #[test]
+    fn test_unknown_char_at_sign_is_error() {
+        let result = parse("$s1 and @foo");
+        assert!(result.is_err(), "@ should produce a parse error");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Unknown"), "error should mention Unknown: {msg}");
+    }
+
+    #[test]
+    fn test_unknown_char_hash_is_error() {
+        let result = parse("#s1");
+        assert!(result.is_err(), "# should produce a parse error");
+    }
+
+    // ── BUG-034: SetExpr::Them returns keys in sorted order ──────────────────
+
+    #[test]
+    fn test_them_keys_sorted() {
+        // Insert keys in reverse order; resolve_set should return them sorted.
+        let expr = parse("all of them").unwrap();
+        let mut m = HashMap::new();
+        m.insert("$z".to_owned(), vec![MatchDetail::new("$z", "x")]);
+        m.insert("$a".to_owned(), vec![MatchDetail::new("$a", "x")]);
+        m.insert("$m".to_owned(), vec![MatchDetail::new("$m", "x")]);
+        assert!(evaluate(&expr, &m));
+
+        // Verify ordering via resolve_set directly
+        let set = SetExpr::Them;
+        let resolved = super::resolve_set(&set, &m);
+        assert_eq!(resolved, vec!["$a", "$m", "$z"]);
+    }
+
+    #[test]
+    fn test_wildcard_keys_sorted() {
+        let set = SetExpr::Wildcard("s".to_owned());
+        let mut m = HashMap::new();
+        m.insert("$s3".to_owned(), vec![]);
+        m.insert("$s1".to_owned(), vec![]);
+        m.insert("$s2".to_owned(), vec![]);
+        let resolved = super::resolve_set(&set, &m);
+        assert_eq!(resolved, vec!["$s1", "$s2", "$s3"]);
     }
 }

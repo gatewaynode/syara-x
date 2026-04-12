@@ -9,6 +9,8 @@ use crate::cache::TextCache;
 use crate::condition;
 use crate::config::Registry;
 use crate::engine::string_matcher::StringMatcher;
+#[cfg(any(feature = "sbert", feature = "phash", feature = "classifier", feature = "llm"))]
+use crate::error::SyaraError;
 use crate::models::{Match, MatchDetail, Rule};
 
 pub struct CompiledRules {
@@ -20,6 +22,11 @@ impl CompiledRules {
     /// Number of compiled rules.
     pub fn rule_count(&self) -> usize {
         self.rules.len()
+    }
+
+    /// Iterate over the names of every compiled rule in source order.
+    pub fn rule_names(&self) -> impl Iterator<Item = &str> {
+        self.rules.iter().map(|r| r.name.as_str())
     }
 }
 
@@ -45,15 +52,23 @@ impl CompiledRules {
     }
 
     /// Match a file against rules that contain phash patterns.
+    ///
+    /// BUG-008: reads file content as text so string patterns also match
+    /// in rules that combine phash + string conditions.
     pub fn scan_file(&self, path: &Path) -> Vec<Match> {
         let mut cache = TextCache::new();
         let mut string_matcher = StringMatcher::new();
         let mut results = Vec::new();
 
+        // Read file content once for string matching
+        let text = std::fs::read(path)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
+
         for rule in &self.rules {
             if !rule.phash.is_empty() {
                 let m =
-                    self.execute_rule(rule, "", Some(path), &mut cache, &mut string_matcher);
+                    self.execute_rule(rule, &text, Some(path), &mut cache, &mut string_matcher);
                 results.push(m);
             }
         }
@@ -134,11 +149,11 @@ impl CompiledRules {
 
         // 5. LLM patterns (highest cost) — short-circuit if not needed
         #[cfg(feature = "llm")]
-        if let Ok(expr) = condition::parse(&rule.condition) {
+        if let Some(ref expr) = rule.compiled_condition {
             for llm_rule in &rule.llm {
                 if condition::is_identifier_needed(
                     &llm_rule.identifier,
-                    &expr,
+                    expr,
                     &pattern_matches,
                 ) {
                     if let Ok(hits) = self.execute_llm(llm_rule, text, cache) {
@@ -150,8 +165,8 @@ impl CompiledRules {
             }
         }
 
-        // Evaluate condition
-        let matched = self.evaluate_condition(&rule.condition, &pattern_matches);
+        // Evaluate condition using pre-compiled AST
+        let matched = self.evaluate_condition(rule, &pattern_matches);
 
         Match {
             rule_name: rule.name.clone(),
@@ -164,15 +179,12 @@ impl CompiledRules {
 
     fn evaluate_condition(
         &self,
-        condition: &str,
+        rule: &Rule,
         pattern_matches: &HashMap<String, Vec<MatchDetail>>,
     ) -> bool {
-        if condition.is_empty() {
-            return false;
-        }
-        match condition::parse(condition) {
-            Ok(expr) => condition::evaluate(&expr, pattern_matches),
-            Err(_) => false,
+        match rule.compiled_condition {
+            Some(ref expr) => condition::evaluate(expr, pattern_matches),
+            None => false,
         }
     }
 

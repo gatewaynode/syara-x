@@ -9,14 +9,14 @@ use crate::models::Rule;
 pub struct Compiler;
 
 impl Compiler {
-    pub fn compile(rules: Vec<Rule>, registry: Registry) -> Result<CompiledRules, SyaraError> {
-        for rule in &rules {
-            Self::validate(rule)?;
+    pub fn compile(mut rules: Vec<Rule>, registry: Registry) -> Result<CompiledRules, SyaraError> {
+        for rule in &mut rules {
+            Self::validate_and_compile(rule)?;
         }
         Ok(CompiledRules::new(rules, registry))
     }
 
-    fn validate(rule: &Rule) -> Result<(), SyaraError> {
+    fn validate_and_compile(rule: &mut Rule) -> Result<(), SyaraError> {
         // Collect all declared identifiers
         let mut declared: HashSet<&str> = HashSet::new();
 
@@ -63,11 +63,10 @@ impl Compiler {
 
         // Verify condition parses cleanly
         if !rule.condition.is_empty() {
+            // BUG-023: use ConditionParse (not ParseError with line: 0) for
+            // condition errors — the compiler doesn't have source line info.
             let expr = condition::parse(&rule.condition).map_err(|e| {
-                SyaraError::ParseError {
-                    line: 0,
-                    message: format!("rule '{}' condition: {}", rule.name, e),
-                }
+                SyaraError::ConditionParse(format!("rule '{}': {}", rule.name, e))
             })?;
 
             // Check that all $identifiers referenced in condition are declared.
@@ -89,7 +88,7 @@ impl Compiler {
                 }
             }
 
-            let _ = expr; // validated above
+            rule.compiled_condition = Some(expr);
         }
 
         Ok(())

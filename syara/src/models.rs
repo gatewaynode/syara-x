@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::condition::Expr;
+
 /// Modifiers applicable to a string pattern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Modifier {
@@ -134,6 +136,8 @@ pub struct Rule {
     pub classifier: Vec<ClassifierRule>,
     pub llm: Vec<LLMRule>,
     pub condition: String,
+    /// Pre-compiled condition AST, populated by the compiler.
+    pub compiled_condition: Option<Expr>,
 }
 
 /// Details of a single matched pattern within a rule.
@@ -141,8 +145,8 @@ pub struct Rule {
 pub struct MatchDetail {
     pub identifier: String,
     pub matched_text: String,
-    pub start_pos: i64,
-    pub end_pos: i64,
+    pub start_pos: Option<usize>,
+    pub end_pos: Option<usize>,
     pub score: f64,
     pub explanation: String,
 }
@@ -152,16 +156,16 @@ impl MatchDetail {
         Self {
             identifier: identifier.into(),
             matched_text: matched_text.into(),
-            start_pos: -1,
-            end_pos: -1,
+            start_pos: None,
+            end_pos: None,
             score: 1.0,
             explanation: String::new(),
         }
     }
 
     pub fn with_position(mut self, start: usize, end: usize) -> Self {
-        self.start_pos = start as i64;
-        self.end_pos = end as i64;
+        self.start_pos = Some(start);
+        self.end_pos = Some(end);
         self
     }
 
@@ -182,14 +186,123 @@ pub struct Match {
 }
 
 impl Match {
+    /// BUG-024: non-matching results carry only the rule name — no cloned
+    /// tags/meta, since consumers filter on `matched` first.
     pub fn no_match(rule: &Rule) -> Self {
         Self {
             rule_name: rule.name.clone(),
-            tags: rule.tags.clone(),
-            meta: rule.meta.clone(),
+            tags: Vec::new(),
+            meta: HashMap::new(),
             matched: false,
             matched_patterns: HashMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── BUG-017: positions use Option<usize> instead of i64 sentinels ───
+
+    #[test]
+    fn test_match_detail_default_positions_are_none() {
+        let detail = MatchDetail::new("$s1", "hello");
+        assert_eq!(detail.start_pos, None);
+        assert_eq!(detail.end_pos, None);
+    }
+
+    #[test]
+    fn test_match_detail_with_position() {
+        let detail = MatchDetail::new("$s1", "hello").with_position(10, 15);
+        assert_eq!(detail.start_pos, Some(10));
+        assert_eq!(detail.end_pos, Some(15));
+    }
+
+    #[test]
+    fn test_match_detail_with_score() {
+        let detail = MatchDetail::new("$s1", "hello").with_score(0.95);
+        assert!((detail.score - 0.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_match_detail_default_score_is_one() {
+        let detail = MatchDetail::new("$s1", "hello");
+        assert!((detail.score - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_no_match_has_empty_patterns() {
+        let rule = Rule {
+            name: "test".to_string(),
+            ..Default::default()
+        };
+        let m = Match::no_match(&rule);
+        assert!(!m.matched);
+        assert!(m.matched_patterns.is_empty());
+        assert_eq!(m.rule_name, "test");
+    }
+
+    // ── BUG-024: no_match uses empty vecs, not clones ─────────────────────
+
+    #[test]
+    fn test_no_match_does_not_clone_tags_or_meta() {
+        let rule = Rule {
+            name: "tagged".to_string(),
+            tags: vec!["security".to_string(), "test".to_string()],
+            meta: {
+                let mut m = HashMap::new();
+                m.insert("author".to_string(), "tester".to_string());
+                m
+            },
+            ..Default::default()
+        };
+        let m = Match::no_match(&rule);
+        assert!(!m.matched);
+        assert!(m.tags.is_empty(), "non-match should have empty tags");
+        assert!(m.meta.is_empty(), "non-match should have empty meta");
+    }
+
+    #[test]
+    fn test_modifier_from_str() {
+        assert_eq!(Modifier::from_str("nocase"), Some(Modifier::NoCase));
+        assert_eq!(Modifier::from_str("wide"), Some(Modifier::Wide));
+        assert_eq!(Modifier::from_str("ascii"), Some(Modifier::Ascii));
+        assert_eq!(Modifier::from_str("dotall"), Some(Modifier::Dotall));
+        assert_eq!(Modifier::from_str("fullword"), Some(Modifier::FullWord));
+        assert_eq!(Modifier::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn test_match_display_matched() {
+        let m = Match {
+            rule_name: "test_rule".to_string(),
+            tags: vec![],
+            meta: HashMap::new(),
+            matched: true,
+            matched_patterns: {
+                let mut mp = HashMap::new();
+                mp.insert(
+                    "$s1".to_string(),
+                    vec![MatchDetail::new("$s1", "x")],
+                );
+                mp
+            },
+        };
+        let display = format!("{}", m);
+        assert!(display.contains("matched=true"));
+        assert!(display.contains("patterns=1"));
+    }
+
+    #[test]
+    fn test_match_display_not_matched() {
+        let rule = Rule {
+            name: "test_rule".to_string(),
+            ..Default::default()
+        };
+        let m = Match::no_match(&rule);
+        let display = format!("{}", m);
+        assert!(display.contains("matched=false"));
     }
 }
 

@@ -55,10 +55,11 @@ impl TextCleaner for AggressiveCleaner {
                 }
             })
             .collect();
-        // Remove digit sequences (matches Python `re.sub(r'\d+', '', ...)`)
+        // BUG-019: use `is_numeric()` to match Python `re.sub(r'\d+', '', ...)`
+        // which strips Unicode digits (Arabic-Indic, Devanagari, etc.), not just ASCII.
         let no_digits: String = filtered
             .chars()
-            .map(|c| if c.is_ascii_digit() { ' ' } else { c })
+            .map(|c| if c.is_numeric() { ' ' } else { c })
             .collect();
         no_digits
             .to_lowercase()
@@ -69,5 +70,36 @@ impl TextCleaner for AggressiveCleaner {
 
     fn name(&self) -> &str {
         "aggressive_cleaning"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aggressive_cleaner_strips_unicode_digits() {
+        // BUG-019: Arabic-Indic numerals (٠-٩) must be stripped like ASCII digits.
+        let cleaner = AggressiveCleaner;
+        let input = "hello ١٢٣ world";
+        let cleaned = cleaner.clean(input);
+        assert_eq!(cleaned, "hello world");
+    }
+
+    #[test]
+    fn aggressive_cleaner_strips_ascii_digits() {
+        let cleaner = AggressiveCleaner;
+        let input = "test 123 value";
+        let cleaned = cleaner.clean(input);
+        assert_eq!(cleaned, "test value");
+    }
+
+    #[test]
+    fn aggressive_cleaner_strips_devanagari_digits() {
+        // BUG-019: Devanagari digits (०-९) are Unicode numeric.
+        let cleaner = AggressiveCleaner;
+        let input = "data ०१२ end";
+        let cleaned = cleaner.clean(input);
+        assert_eq!(cleaned, "data end");
     }
 }
