@@ -4,6 +4,10 @@ description = "C API for syara-x"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories = ["external-ffi-bindings"]
+readme = "../README.md"
 
 [lib]
 crate-type = ["cdylib", "staticlib"]

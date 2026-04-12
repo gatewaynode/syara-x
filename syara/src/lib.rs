@@ -22,15 +22,15 @@ assert_eq!(matches.iter().filter(|m| m.matched).count(), 1);
 ```
 */
 
-pub mod cache;
+pub(crate) mod cache;
 pub mod compiled_rules;
-pub mod compiler;
-pub mod condition;
-pub mod config;
+pub(crate) mod compiler;
+pub(crate) mod condition;
+pub(crate) mod config;
 pub mod engine;
 pub mod error;
 pub mod models;
-pub mod parser;
+pub(crate) mod parser;
 
 pub use compiled_rules::CompiledRules;
 pub use error::SyaraError;

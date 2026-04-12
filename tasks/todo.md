@@ -7,15 +7,15 @@
 
 ### Publish to crates.io
 
-- [ ] Audit `Cargo.toml` metadata (name, version, description, license, repository, keywords, categories)
-- [ ] Ensure `LICENSE` file is present and matches `Cargo.toml` license field
-- [ ] Review public API surface — only expose what should be public
-- [ ] Add `README.md` that crates.io will render (or set `readme` in Cargo.toml)
-- [ ] Run `cargo publish --dry-run` to catch packaging issues
-- [ ] Verify all pinned dependencies resolve cleanly from crates.io
-- [ ] Check for any path dependencies that need to be published first (`syara-x-capi`)
-- [ ] Set up crate ownership / team access on crates.io
-- [ ] Publish initial version
+- [x] Audit `Cargo.toml` metadata (name, version, description, license, repository, keywords, categories)
+- [x] Ensure `LICENSE` file is present and matches `Cargo.toml` license field
+- [x] Review public API surface — only expose what should be public (5 modules made `pub(crate)`)
+- [x] Add `README.md` that crates.io will render (set `readme = "../README.md"` in both Cargo.toml)
+- [x] Run `cargo publish --dry-run` to catch packaging issues (clean, 0 warnings)
+- [x] Verify all pinned dependencies resolve cleanly from crates.io
+- [x] Check for any path dependencies that need to be published first (publish order: syara-x then capi)
+- [ ] Set up crate ownership / team access on crates.io (manual — see `tasks/PUBLISH-GUIDE.md`)
+- [ ] Publish initial version (manual — see `tasks/PUBLISH-GUIDE.md`)
 
 ### Integrated Local LLM Processing via Burn Framework
 

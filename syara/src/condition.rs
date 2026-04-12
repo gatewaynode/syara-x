@@ -367,6 +367,7 @@ fn resolve_set(set: &SetExpr, matches: &HashMap<String, Vec<MatchDetail>>) -> Ve
 ///
 /// Evaluates hypothetically without cloning the full match map — checks
 /// whether adding `identifier` as matched would make the condition true.
+#[cfg(feature = "llm")]
 pub fn is_identifier_needed(
     identifier: &str,
     expr: &Expr,
@@ -376,6 +377,7 @@ pub fn is_identifier_needed(
 }
 
 /// Evaluate as if `extra_id` were matched, without cloning the map.
+#[cfg(feature = "llm")]
 fn evaluate_hypothetical(
     expr: &Expr,
     matches: &HashMap<String, Vec<MatchDetail>>,
@@ -527,6 +529,7 @@ mod tests {
     // ── BUG-007: hypothetical evaluation without cloning ────────────────────
 
     #[test]
+    #[cfg(feature = "llm")]
     fn test_is_identifier_needed_returns_true() {
         // condition: $s1 and $llm1
         // $s1 matched, $llm1 not yet — adding $llm1 would make it true
@@ -536,6 +539,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "llm")]
     fn test_is_identifier_needed_returns_false() {
         // condition: $s1 and $s2 and $llm1
         // only $s1 matched — even if $llm1 matches, $s2 is still missing
@@ -545,6 +549,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "llm")]
     fn test_is_identifier_needed_or_branch() {
         // condition: $s1 or $llm1
         // $s1 already matched — $llm1 not needed (condition already true)
@@ -558,6 +563,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "llm")]
     fn test_is_identifier_needed_negated() {
         // condition: not $llm1
         // With $llm1 hypothetically matched, `not $llm1` is false

@@ -4,6 +4,10 @@ description = "Super YARA — extends YARA-compatible rules with semantic, class
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories = ["text-processing", "algorithms"]
+readme = "../README.md"
 
 [dependencies]
 thiserror = { workspace = true }

@@ -30,6 +30,7 @@ impl TextCache {
     }
 
     /// Returns the number of cached entries.
+    #[cfg(test)]
     pub fn size(&self) -> usize {
         self.store.len()
     }

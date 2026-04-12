@@ -7,6 +7,7 @@ use crate::engine::cleaner::{AggressiveCleaner, DefaultCleaner, NoOpCleaner, Tex
 use crate::engine::chunker::{
     Chunker, FixedSizeChunker, NoChunker, ParagraphChunker, SentenceChunker, WordChunker,
 };
+#[cfg(any(feature = "sbert", feature = "classifier", feature = "llm", feature = "phash"))]
 use crate::error::SyaraError;
 
 #[cfg(feature = "sbert")]
@@ -113,6 +114,7 @@ impl Registry {
         }
     }
 
+    #[cfg(any(feature = "sbert", feature = "classifier", feature = "llm"))]
     pub fn get_cleaner(&self, name: &str) -> Result<&dyn TextCleaner, SyaraError> {
         self.cleaners
             .get(name)
@@ -123,6 +125,7 @@ impl Registry {
             })
     }
 
+    #[cfg(any(feature = "sbert", feature = "classifier", feature = "llm"))]
     pub fn get_chunker(&self, name: &str) -> Result<&dyn Chunker, SyaraError> {
         self.chunkers
             .get(name)
