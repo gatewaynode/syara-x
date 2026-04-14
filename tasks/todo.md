@@ -41,9 +41,9 @@ Adds local inference using [Burn](https://github.com/tracel-ai/burn) as an addit
 - [x] No custom RmsNorm or RoPE needed — Burn has built-in modules
 
 #### Phase 3: Gated DeltaNet + Qwen3.5 Model Assembly
-- [ ] `burn_model/deltanet.rs` — Gated DeltaNet (recurrent mode)
-- [ ] `burn_model/qwen3.rs` — Qwen3Config, HybridBlock, Qwen3TextModel
-- [ ] Tests: forward pass, hybrid dispatch verification
+- [x] `burn_model/deltanet.rs` — Gated DeltaNet (recurrent mode)
+- [x] `burn_model/qwen3.rs` — Qwen3Config, HybridBlock, Qwen3TextModel
+- [x] Tests: forward pass, hybrid dispatch verification
 
 #### Phase 4: Weight Loading, Tokenizer, Inference Pipeline
 - [ ] `burn_model/loader.rs` — load_qwen3 from safetensors

@@ -5,4 +5,6 @@
 //! attention (GQA + QK-norm) and feed-forward (SwiGLU) are custom.
 
 pub mod attention;
+pub mod deltanet;
 pub mod ffn;
+pub mod qwen3;
