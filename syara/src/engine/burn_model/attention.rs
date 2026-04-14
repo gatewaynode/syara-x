@@ -109,17 +109,17 @@ impl FullAttentionConfig {
 /// Input: `[batch, seq_len, d_model]` → Output: `[batch, seq_len, d_model]`.
 #[derive(Module, Debug)]
 pub struct FullAttention<B: Backend> {
-    q_proj: Linear<B>,
-    k_proj: Linear<B>,
-    v_proj: Linear<B>,
-    o_proj: Linear<B>,
-    q_norm: Option<RmsNorm<B>>,
-    k_norm: Option<RmsNorm<B>>,
-    rope: RotaryEncoding<B>,
-    n_heads: usize,
-    n_kv_heads: usize,
-    head_dim: usize,
-    rotary_dim: usize,
+    pub(crate) q_proj: Linear<B>,
+    pub(crate) k_proj: Linear<B>,
+    pub(crate) v_proj: Linear<B>,
+    pub(crate) o_proj: Linear<B>,
+    pub(crate) q_norm: Option<RmsNorm<B>>,
+    pub(crate) k_norm: Option<RmsNorm<B>>,
+    pub(crate) rope: RotaryEncoding<B>,
+    pub(crate) n_heads: usize,
+    pub(crate) n_kv_heads: usize,
+    pub(crate) head_dim: usize,
+    pub(crate) rotary_dim: usize,
 }
 
 impl<B: Backend> FullAttention<B> {

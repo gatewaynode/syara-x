@@ -29,7 +29,7 @@ sbert = ["dep:reqwest", "dep:serde_json"]
 classifier = ["sbert"]
 llm = ["dep:reqwest", "dep:serde_json"]
 phash = ["dep:image"]
-burn-llm = ["dep:burn", "dep:tokenizers", "dep:safetensors"]
+burn-llm = ["dep:burn", "dep:tokenizers", "dep:safetensors", "dep:serde_json"]
 burn-llm-gpu = ["burn-llm", "burn/wgpu"]
 all = ["sbert", "classifier", "llm", "phash"]
 

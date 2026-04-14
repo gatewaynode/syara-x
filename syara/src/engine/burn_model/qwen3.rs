@@ -166,10 +166,10 @@ impl<B: Backend> HybridBlock<B> {
 /// Pre-norm transformer block: LN → Attention/DeltaNet → residual → LN → FFN → residual.
 #[derive(Module, Debug)]
 pub struct TransformerBlock<B: Backend> {
-    input_layernorm: RmsNorm<B>,
-    hybrid: HybridBlock<B>,
-    post_attention_layernorm: RmsNorm<B>,
-    mlp: FeedForward<B>,
+    pub(crate) input_layernorm: RmsNorm<B>,
+    pub(crate) hybrid: HybridBlock<B>,
+    pub(crate) post_attention_layernorm: RmsNorm<B>,
+    pub(crate) mlp: FeedForward<B>,
 }
 
 impl<B: Backend> TransformerBlock<B> {
@@ -193,12 +193,12 @@ impl<B: Backend> TransformerBlock<B> {
 /// Qwen3.5 text decoder: embedding → N transformer blocks → norm → logits.
 #[derive(Module, Debug)]
 pub struct Qwen3TextModel<B: Backend> {
-    embed_tokens: Embedding<B>,
-    layers: Vec<TransformerBlock<B>>,
-    final_norm: RmsNorm<B>,
-    tie_word_embeddings: bool,
-    hidden_size: usize,
-    vocab_size: usize,
+    pub(crate) embed_tokens: Embedding<B>,
+    pub(crate) layers: Vec<TransformerBlock<B>>,
+    pub(crate) final_norm: RmsNorm<B>,
+    pub(crate) tie_word_embeddings: bool,
+    pub(crate) hidden_size: usize,
+    pub(crate) vocab_size: usize,
 }
 
 impl<B: Backend> Qwen3TextModel<B> {

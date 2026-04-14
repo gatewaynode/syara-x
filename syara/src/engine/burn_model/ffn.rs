@@ -38,9 +38,9 @@ impl FeedForwardConfig {
 /// Input/output shape: `[batch, seq_len, d_model]`.
 #[derive(Module, Debug)]
 pub struct FeedForward<B: Backend> {
-    gate_proj: Linear<B>,
-    up_proj: Linear<B>,
-    down_proj: Linear<B>,
+    pub(crate) gate_proj: Linear<B>,
+    pub(crate) up_proj: Linear<B>,
+    pub(crate) down_proj: Linear<B>,
 }
 
 impl<B: Backend> FeedForward<B> {

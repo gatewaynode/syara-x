@@ -82,27 +82,27 @@ impl GatedDeltaNetConfig {
 #[derive(Module, Debug)]
 pub struct GatedDeltaNet<B: Backend> {
     /// Fused Q/K/V projection.
-    in_proj_qkv: Linear<B>,
+    pub(crate) in_proj_qkv: Linear<B>,
     /// Output gate projection.
-    in_proj_z: Linear<B>,
+    pub(crate) in_proj_z: Linear<B>,
     /// Alpha (decay) projection — one scalar per head.
-    in_proj_a: Linear<B>,
+    pub(crate) in_proj_a: Linear<B>,
     /// Beta (write strength) projection — one scalar per head.
-    in_proj_b: Linear<B>,
+    pub(crate) in_proj_b: Linear<B>,
     /// Depthwise causal convolution on concatenated Q/K/V.
-    conv1d: Conv1d<B>,
+    pub(crate) conv1d: Conv1d<B>,
     /// Log-space decay parameter, shape `[num_heads]`.
-    a_log: Param<Tensor<B, 1>>,
+    pub(crate) a_log: Param<Tensor<B, 1>>,
     /// Timestep bias, shape `[num_heads]`.
-    dt_bias: Param<Tensor<B, 1>>,
+    pub(crate) dt_bias: Param<Tensor<B, 1>>,
     /// Internal RmsNorm applied to output before gating.
-    norm: RmsNorm<B>,
+    pub(crate) norm: RmsNorm<B>,
     /// Output projection.
-    out_proj: Linear<B>,
-    num_heads: usize,
-    key_head_dim: usize,
-    value_head_dim: usize,
-    conv_kernel_size: usize,
+    pub(crate) out_proj: Linear<B>,
+    pub(crate) num_heads: usize,
+    pub(crate) key_head_dim: usize,
+    pub(crate) value_head_dim: usize,
+    pub(crate) conv_kernel_size: usize,
 }
 
 impl<B: Backend> GatedDeltaNet<B> {

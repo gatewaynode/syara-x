@@ -7,4 +7,6 @@
 pub mod attention;
 pub mod deltanet;
 pub mod ffn;
+pub mod generate;
+pub mod loader;
 pub mod qwen3;

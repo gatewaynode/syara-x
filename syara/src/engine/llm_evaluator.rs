@@ -59,7 +59,6 @@ pub trait LLMEvaluator: Send + Sync {
 /// Build a YES/NO prompt with XML delimiters around untrusted content (BUG-013).
 ///
 /// Shared by all LLM backends (HTTP and Burn).
-#[allow(dead_code)] // consumed by BurnEvaluator in Phase 4
 pub(crate) fn build_prompt(pattern: &str, input_text: &str) -> String {
     format!(
         "Determine if the input text semantically matches the pattern's intent.\n\n\
@@ -77,7 +76,6 @@ pub(crate) fn build_prompt(pattern: &str, input_text: &str) -> String {
 /// "Yesterday..." is not treated as a match.
 ///
 /// Shared by all LLM backends (HTTP and Burn).
-#[allow(dead_code)] // consumed by BurnEvaluator in Phase 4
 pub(crate) fn parse_response(response: &str) -> (bool, String) {
     let trimmed = response.trim();
     let upper = trimmed.to_uppercase();
