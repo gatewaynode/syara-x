@@ -131,6 +131,28 @@ mod tests {
     }
 
     #[test]
+    fn fixture_load_and_evaluate() {
+        let fixture_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tiny-qwen");
+        let evaluator = BurnEvaluator::from_dir(&fixture_dir)
+            .expect("failed to load fixture model");
+
+        // Random weights produce gibberish, but the pipeline should not panic
+        // and should return a parseable response (likely "Ambiguous" since
+        // random tokens won't form "YES" or "NO").
+        let (is_match, explanation) = evaluator
+            .evaluate("test pattern", "test input")
+            .expect("evaluate should not error");
+
+        // With random weights the response is unpredictable, but explanation
+        // must be non-empty regardless of match/no-match.
+        assert!(!explanation.is_empty(), "explanation should not be empty");
+        // Verify we get a boolean back (type system guarantees this, but
+        // let's exercise the full path).
+        let _ = is_match;
+    }
+
+    #[test]
     #[ignore] // Requires real model at models/Qwen3.5-0.8B-Base/
     fn integration_real_model() {
         let evaluator = BurnEvaluator::from_dir("../models/Qwen3.5-0.8B-Base")

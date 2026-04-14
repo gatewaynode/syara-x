@@ -49,7 +49,7 @@ Adds local inference using [Burn](https://github.com/tracel-ai/burn) as an addit
 - [x] `burn_model/loader.rs` — load_qwen3 from safetensors (config.json parsing, bf16→f32, weight mapping)
 - [x] `burn_model/generate.rs` — greedy_generate (argmax loop, EOS stop)
 - [x] Complete `BurnEvaluator::evaluate()` (tokenize → generate → parse, Mutex for Send+Sync)
-- [ ] Create test fixtures (tiny model + tokenizer)
+- [x] Create test fixtures (tiny model + tokenizer)
 - [x] Integration test with real Qwen3.5 model (`#[ignore]`)
 
 #### Phase 5: Nemotron Model, GPU Backend, Documentation

@@ -289,6 +289,9 @@ fn load_tensor<B: Backend, const D: usize>(
 }
 
 /// Assign a 2D weight tensor to a `Linear` module.
+///
+/// Safetensors (PyTorch convention) stores linear weights as `[out, in]`.
+/// Burn stores them as `[in, out]`, so we transpose during loading.
 fn assign_linear<B: Backend>(
     tensors: &SafeTensors<'_>,
     name: &str,
@@ -296,7 +299,7 @@ fn assign_linear<B: Backend>(
     device: &B::Device,
 ) -> Result<(), SyaraError> {
     let t: Tensor<B, 2> = load_tensor(tensors, name, device)?;
-    linear.weight = Param::initialized(ParamId::new(), t);
+    linear.weight = Param::initialized(ParamId::new(), t.transpose());
     Ok(())
 }
 
@@ -405,5 +408,45 @@ mod tests {
         assert!((config.partial_rotary_factor - 0.25).abs() < 1e-6);
         assert!(config.tie_word_embeddings);
         assert_eq!(config.eos_token_id, 248044);
+    }
+
+    #[test]
+    fn load_config_from_fixture() {
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tiny-qwen");
+        let config = load_qwen3_config(&fixture_dir).unwrap();
+        assert_eq!(config.vocab_size, 256);
+        assert_eq!(config.hidden_size, 64);
+        assert_eq!(config.num_hidden_layers, 2);
+        assert_eq!(config.num_attention_heads, 4);
+        assert_eq!(config.num_key_value_heads, 2);
+        assert_eq!(config.head_dim, 16);
+        assert_eq!(config.linear_num_key_heads, 4);
+        assert_eq!(config.full_attention_interval, 2);
+        assert!((config.rope_theta - 10_000.0).abs() < 1.0);
+        assert_eq!(config.eos_token_id, 0);
+    }
+
+    #[test]
+    fn load_model_from_fixture() {
+        use burn::backend::NdArray;
+        type B = NdArray<f32>;
+
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tiny-qwen");
+        let config = load_qwen3_config(&fixture_dir).unwrap();
+        let device = Default::default();
+        let model = load_qwen3::<B>(&config, &fixture_dir, &device).unwrap();
+
+        // Verify model structure
+        assert_eq!(model.num_layers(), 2);
+
+        // Verify it can run a forward pass
+        let input = burn::tensor::Tensor::<B, 2, burn::tensor::Int>::from_data(
+            [[1i64, 2, 3]],
+            &device,
+        );
+        let logits = model.forward(input);
+        assert_eq!(logits.dims(), [1, 3, 256]);
     }
 }
