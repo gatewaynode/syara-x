@@ -5,16 +5,16 @@
 
 use burn::prelude::*;
 
-use super::qwen3::Qwen3TextModel;
+use super::ForwardModel;
 
-/// Generate tokens greedily (argmax) from a Qwen3 model.
+/// Generate tokens greedily (argmax) from any model implementing `ForwardModel`.
 ///
 /// Runs the full model on the growing sequence each step (no KV cache).
 /// Stops when `eos_token_id` is produced or `max_new_tokens` is reached.
 ///
 /// Returns the generated token IDs (excluding the input).
 pub fn greedy_generate<B: Backend>(
-    model: &Qwen3TextModel<B>,
+    model: &impl ForwardModel<B>,
     input_ids: &[u32],
     max_new_tokens: usize,
     eos_token_id: u32,

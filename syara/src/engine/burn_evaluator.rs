@@ -84,7 +84,7 @@ impl LLMEvaluator for BurnEvaluator {
             SyaraError::LlmError(format!("model lock poisoned: {e}"))
         })?;
         let output_ids = greedy_generate(
-            &model,
+            &*model,
             input_ids,
             64,
             self.config.eos_token_id as u32,

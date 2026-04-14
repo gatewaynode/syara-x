@@ -231,6 +231,12 @@ impl<B: Backend> Qwen3TextModel<B> {
     }
 }
 
+impl<B: Backend> super::ForwardModel<B> for Qwen3TextModel<B> {
+    fn forward(&self, input_ids: Tensor<B, 2, Int>) -> Tensor<B, 3> {
+        self.forward(input_ids)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
