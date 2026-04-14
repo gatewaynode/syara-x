@@ -8,8 +8,11 @@ pub mod semantic_matcher;
 #[cfg(feature = "classifier")]
 pub mod classifier;
 
-#[cfg(feature = "llm")]
+#[cfg(any(feature = "llm", feature = "burn-llm"))]
 pub mod llm_evaluator;
+
+#[cfg(feature = "burn-llm")]
+pub mod burn_evaluator;
 
 #[cfg(feature = "phash")]
 pub mod phash_matcher;

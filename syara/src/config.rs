@@ -7,7 +7,7 @@ use crate::engine::cleaner::{AggressiveCleaner, DefaultCleaner, NoOpCleaner, Tex
 use crate::engine::chunker::{
     Chunker, FixedSizeChunker, NoChunker, ParagraphChunker, SentenceChunker, WordChunker,
 };
-#[cfg(any(feature = "sbert", feature = "classifier", feature = "llm", feature = "phash"))]
+#[cfg(any(feature = "sbert", feature = "classifier", feature = "llm", feature = "burn-llm", feature = "phash"))]
 use crate::error::SyaraError;
 
 #[cfg(feature = "sbert")]
@@ -16,8 +16,10 @@ use crate::engine::semantic_matcher::{HttpEmbeddingMatcher, SemanticMatcher};
 #[cfg(feature = "classifier")]
 use crate::engine::classifier::{HttpEmbeddingClassifier, TextClassifier};
 
+#[cfg(any(feature = "llm", feature = "burn-llm"))]
+use crate::engine::llm_evaluator::LLMEvaluator;
 #[cfg(feature = "llm")]
-use crate::engine::llm_evaluator::{LLMEvaluator, OllamaEvaluator};
+use crate::engine::llm_evaluator::OllamaEvaluator;
 
 #[cfg(feature = "phash")]
 use crate::engine::phash_matcher::{
@@ -31,7 +33,7 @@ pub struct Registry {
     semantic_matchers: HashMap<String, Box<dyn SemanticMatcher>>,
     #[cfg(feature = "classifier")]
     classifiers: HashMap<String, Box<dyn TextClassifier>>,
-    #[cfg(feature = "llm")]
+    #[cfg(any(feature = "llm", feature = "burn-llm"))]
     llm_evaluators: HashMap<String, Box<dyn LLMEvaluator>>,
     #[cfg(feature = "phash")]
     phash_matchers: HashMap<String, Box<dyn PHashMatcher>>,
@@ -46,7 +48,7 @@ impl Registry {
             semantic_matchers: HashMap::new(),
             #[cfg(feature = "classifier")]
             classifiers: HashMap::new(),
-            #[cfg(feature = "llm")]
+            #[cfg(any(feature = "llm", feature = "burn-llm"))]
             llm_evaluators: HashMap::new(),
             #[cfg(feature = "phash")]
             phash_matchers: HashMap::new(),
@@ -114,7 +116,7 @@ impl Registry {
         }
     }
 
-    #[cfg(any(feature = "sbert", feature = "classifier", feature = "llm"))]
+    #[cfg(any(feature = "sbert", feature = "classifier", feature = "llm", feature = "burn-llm"))]
     pub fn get_cleaner(&self, name: &str) -> Result<&dyn TextCleaner, SyaraError> {
         self.cleaners
             .get(name)
@@ -125,7 +127,7 @@ impl Registry {
             })
     }
 
-    #[cfg(any(feature = "sbert", feature = "classifier", feature = "llm"))]
+    #[cfg(any(feature = "sbert", feature = "classifier", feature = "llm", feature = "burn-llm"))]
     pub fn get_chunker(&self, name: &str) -> Result<&dyn Chunker, SyaraError> {
         self.chunkers
             .get(name)
@@ -187,7 +189,7 @@ impl Registry {
         self.classifiers.insert(name.into(), classifier);
     }
 
-    #[cfg(feature = "llm")]
+    #[cfg(any(feature = "llm", feature = "burn-llm"))]
     pub fn get_llm_evaluator(
         &self,
         name: &str,
@@ -201,7 +203,7 @@ impl Registry {
             })
     }
 
-    #[cfg(feature = "llm")]
+    #[cfg(any(feature = "llm", feature = "burn-llm"))]
     pub fn register_llm_evaluator(
         &mut self,
         name: impl Into<String>,

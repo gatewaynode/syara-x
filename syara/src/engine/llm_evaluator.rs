@@ -1,11 +1,14 @@
 //! LLM-based evaluation for semantic rule matching.
 //!
 //! [`LLMEvaluator`] abstracts over LLM backends. The built-in
-//! [`OllamaEvaluator`] calls the Ollama-compatible `/api/chat` endpoint using
-//! a YES/NO prompt and parses the response.
+//! [`OllamaEvaluator`] (feature `llm`) calls an Ollama-compatible `/api/chat`
+//! endpoint. The [`BurnEvaluator`](super::burn_evaluator) (feature `burn-llm`)
+//! runs inference locally via the Burn framework.
+//!
+//! Both backends share [`build_prompt`] and [`parse_response`].
 //!
 //! LLM matches are binary (score = 1.0). The execution engine short-circuits
-//! LLM calls via `is_identifier_needed()` to avoid unnecessary HTTP round-trips.
+//! LLM calls via `is_identifier_needed()` to avoid unnecessary round-trips.
 
 use crate::error::SyaraError;
 use crate::models::{LLMRule, MatchDetail};
@@ -51,6 +54,55 @@ pub trait LLMEvaluator: Send + Sync {
     }
 }
 
+// ── Shared prompt / response utilities ───────────────────────────────────────
+
+/// Build a YES/NO prompt with XML delimiters around untrusted content (BUG-013).
+///
+/// Shared by all LLM backends (HTTP and Burn).
+#[allow(dead_code)] // consumed by BurnEvaluator in Phase 4
+pub(crate) fn build_prompt(pattern: &str, input_text: &str) -> String {
+    format!(
+        "Determine if the input text semantically matches the pattern's intent.\n\n\
+         <pattern>{pattern}</pattern>\n\n\
+         <input>{input_text}</input>\n\n\
+         Respond with ONLY one of:\n\
+         - \"YES: <brief explanation>\" if it matches\n\
+         - \"NO: <brief explanation>\" if it doesn't match"
+    )
+}
+
+/// Parse a YES/NO response from any LLM backend.
+///
+/// BUG-028: checks for a word boundary after "YES"/"NO" so that
+/// "Yesterday..." is not treated as a match.
+///
+/// Shared by all LLM backends (HTTP and Burn).
+#[allow(dead_code)] // consumed by BurnEvaluator in Phase 4
+pub(crate) fn parse_response(response: &str) -> (bool, String) {
+    let trimmed = response.trim();
+    let upper = trimmed.to_uppercase();
+
+    if upper.starts_with("YES")
+        && upper.as_bytes().get(3).is_none_or(|b| !b.is_ascii_alphabetic())
+    {
+        let explanation = trimmed
+            .split_once(':')
+            .map(|x| x.1.trim().to_owned())
+            .unwrap_or_else(|| "LLM matched".into());
+        (true, explanation)
+    } else if upper.starts_with("NO")
+        && upper.as_bytes().get(2).is_none_or(|b| !b.is_ascii_alphabetic())
+    {
+        let explanation = trimmed
+            .split_once(':')
+            .map(|x| x.1.trim().to_owned())
+            .unwrap_or_else(|| "LLM did not match".into());
+        (false, explanation)
+    } else {
+        (false, format!("Ambiguous LLM response: {trimmed}"))
+    }
+}
+
 // ── HTTP implementation ───────────────────────────────────────────────────────
 
 /// LLM evaluator backed by an Ollama-compatible `/api/chat` HTTP endpoint.
@@ -72,12 +124,14 @@ pub trait LLMEvaluator: Send + Sync {
 ///
 /// These reduce but do not eliminate the risk.  For high-assurance use cases,
 /// consider a fine-tuned classifier instead of a general-purpose LLM.
+#[cfg(feature = "llm")]
 pub struct OllamaEvaluator {
     endpoint: String,
     model: String,
     client: reqwest::blocking::Client,
 }
 
+#[cfg(feature = "llm")]
 impl OllamaEvaluator {
     const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -94,54 +148,16 @@ impl OllamaEvaluator {
             client,
         }
     }
-
-    /// Build prompt with XML delimiters around untrusted content (BUG-013).
-    fn build_prompt(pattern: &str, input_text: &str) -> String {
-        format!(
-            "Determine if the input text semantically matches the pattern's intent.\n\n\
-             <pattern>{pattern}</pattern>\n\n\
-             <input>{input_text}</input>\n\n\
-             Respond with ONLY one of:\n\
-             - \"YES: <brief explanation>\" if it matches\n\
-             - \"NO: <brief explanation>\" if it doesn't match"
-        )
-    }
-
-    /// BUG-028: check for a word boundary after "YES"/"NO" so that
-    /// "Yesterday..." is not treated as a match.
-    fn parse_response(response: &str) -> (bool, String) {
-        let trimmed = response.trim();
-        let upper = trimmed.to_uppercase();
-
-        if upper.starts_with("YES")
-            && upper.as_bytes().get(3).is_none_or(|b| !b.is_ascii_alphabetic())
-        {
-            let explanation = trimmed
-                .split_once(':')
-                .map(|x| x.1.trim().to_owned())
-                .unwrap_or_else(|| "LLM matched".into());
-            (true, explanation)
-        } else if upper.starts_with("NO")
-            && upper.as_bytes().get(2).is_none_or(|b| !b.is_ascii_alphabetic())
-        {
-            let explanation = trimmed
-                .split_once(':')
-                .map(|x| x.1.trim().to_owned())
-                .unwrap_or_else(|| "LLM did not match".into());
-            (false, explanation)
-        } else {
-            (false, format!("Ambiguous LLM response: {trimmed}"))
-        }
-    }
 }
 
+#[cfg(feature = "llm")]
 impl LLMEvaluator for OllamaEvaluator {
     fn evaluate(&self, pattern: &str, input_text: &str) -> Result<(bool, String), SyaraError> {
         if pattern.is_empty() || input_text.is_empty() {
             return Ok((false, "Empty input".into()));
         }
 
-        let prompt = Self::build_prompt(pattern, input_text);
+        let prompt = build_prompt(pattern, input_text);
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -176,7 +192,7 @@ impl LLMEvaluator for OllamaEvaluator {
                 SyaraError::LlmError("unexpected response: missing message.content".into())
             })?;
 
-        Ok(Self::parse_response(content))
+        Ok(parse_response(content))
     }
 }
 
@@ -259,28 +275,27 @@ mod tests {
 
     #[test]
     fn parse_response_yes() {
-        let (is_match, explanation) =
-            OllamaEvaluator::parse_response("YES: it matches the pattern");
+        let (is_match, explanation) = parse_response("YES: it matches the pattern");
         assert!(is_match);
         assert_eq!(explanation, "it matches the pattern");
     }
 
     #[test]
     fn parse_response_yes_without_colon() {
-        let (is_match, _) = OllamaEvaluator::parse_response("YES");
+        let (is_match, _) = parse_response("YES");
         assert!(is_match);
     }
 
     #[test]
     fn parse_response_no() {
-        let (is_match, explanation) = OllamaEvaluator::parse_response("NO: does not match");
+        let (is_match, explanation) = parse_response("NO: does not match");
         assert!(!is_match);
         assert_eq!(explanation, "does not match");
     }
 
     #[test]
     fn parse_response_ambiguous() {
-        let (is_match, explanation) = OllamaEvaluator::parse_response("MAYBE: unclear");
+        let (is_match, explanation) = parse_response("MAYBE: unclear");
         assert!(!is_match);
         assert!(explanation.contains("Ambiguous"));
     }
@@ -288,7 +303,7 @@ mod tests {
     #[test]
     fn parse_response_yesterday_is_not_yes() {
         // BUG-028: "Yesterday..." must not be treated as "YES".
-        let (is_match, explanation) = OllamaEvaluator::parse_response("Yesterday I saw...");
+        let (is_match, explanation) = parse_response("Yesterday I saw...");
         assert!(!is_match, "\"Yesterday\" must not match as YES");
         assert!(explanation.contains("Ambiguous"));
     }
@@ -296,12 +311,13 @@ mod tests {
     #[test]
     fn parse_response_notable_is_not_no() {
         // BUG-028: "Notable..." must not be treated as "NO".
-        let (is_match, explanation) = OllamaEvaluator::parse_response("Notable difference...");
+        let (is_match, explanation) = parse_response("Notable difference...");
         assert!(!is_match);
         assert!(explanation.contains("Ambiguous"), "\"Notable\" should be ambiguous, not NO");
     }
 
     #[test]
+    #[cfg(feature = "llm")]
     fn ollama_evaluator_empty_inputs_return_false() {
         // Tests the early-exit path without making an HTTP call.
         let evaluator = OllamaEvaluator::new("http://localhost:11434/api/chat", "llama3.2");
@@ -317,7 +333,7 @@ mod tests {
     #[test]
     fn prompt_uses_xml_delimiters() {
         // BUG-013: untrusted content must be wrapped in delimiters.
-        let prompt = OllamaEvaluator::build_prompt("test pattern", "user input");
+        let prompt = build_prompt("test pattern", "user input");
         assert!(
             prompt.contains("<pattern>test pattern</pattern>"),
             "pattern must be delimited: {prompt}"
@@ -329,6 +345,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "llm")]
     fn llm_evaluator_has_timeouts_configured() {
         // BUG-011: verify timeout constants are sensible.
         assert_eq!(

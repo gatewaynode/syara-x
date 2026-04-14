@@ -9,7 +9,7 @@ use crate::cache::TextCache;
 use crate::condition;
 use crate::config::Registry;
 use crate::engine::string_matcher::StringMatcher;
-#[cfg(any(feature = "sbert", feature = "phash", feature = "classifier", feature = "llm"))]
+#[cfg(any(feature = "sbert", feature = "phash", feature = "classifier", feature = "llm", feature = "burn-llm"))]
 use crate::error::SyaraError;
 use crate::models::{Match, MatchDetail, Rule};
 
@@ -148,7 +148,7 @@ impl CompiledRules {
         }
 
         // 5. LLM patterns (highest cost) — short-circuit if not needed
-        #[cfg(feature = "llm")]
+        #[cfg(any(feature = "llm", feature = "burn-llm"))]
         if let Some(ref expr) = rule.compiled_condition {
             for llm_rule in &rule.llm {
                 if condition::is_identifier_needed(
@@ -230,7 +230,7 @@ impl CompiledRules {
         classifier.classify_chunks(rule, &chunks)
     }
 
-    #[cfg(feature = "llm")]
+    #[cfg(any(feature = "llm", feature = "burn-llm"))]
     fn execute_llm(
         &self,
         rule: &crate::models::LLMRule,
@@ -281,7 +281,7 @@ impl CompiledRules {
         self.registry.register_classifier(name, classifier);
     }
 
-    #[cfg(feature = "llm")]
+    #[cfg(any(feature = "llm", feature = "burn-llm"))]
     pub fn register_llm_evaluator(
         &mut self,
         name: impl Into<String>,

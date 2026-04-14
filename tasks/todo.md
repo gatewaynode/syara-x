@@ -14,20 +14,49 @@
 - [x] Run `cargo publish --dry-run` to catch packaging issues (clean, 0 warnings)
 - [x] Verify all pinned dependencies resolve cleanly from crates.io
 - [x] Check for any path dependencies that need to be published first (publish order: syara-x then capi)
-- [ ] Set up crate ownership / team access on crates.io (manual — see `tasks/PUBLISH-GUIDE.md`)
-- [ ] Publish initial version (manual — see `tasks/PUBLISH-GUIDE.md`)
+- [x] Set up crate ownership / team access on crates.io
+- [x] Publish initial version (published 2026-04-13)
 
 ### Integrated Local LLM Processing via Burn Framework
 
-Adds local inference using [Burn](https://github.com/tracel-ai/burn) as an additional LLM backend alongside the existing HTTP-based evaluator (`engine/llm_evaluator.rs`, Phase 4). Users choose HTTP (OpenAI/Ollama) or local Burn inference via configuration.
+Adds local inference using [Burn](https://github.com/tracel-ai/burn) as an additional LLM backend alongside the existing HTTP-based evaluator. Target models: Qwen3.5-0.8B (hybrid DeltaNet/attention) and Nemotron-3-Nano-4B (hybrid Mamba/attention). Full plan: `~/.claude/plans/shiny-mapping-frost.md`
 
-- [ ] Research Burn's current model ecosystem — available architectures, ONNX import, tokenizer support
-- [ ] Decide on target model(s) for local LLM evaluation (small transformer, distilled, etc.)
-- [ ] Add `burn` dependencies behind a new feature flag (e.g., `burn-llm`)
-- [ ] Implement tokenizer integration (Burn + `tokenizers` crate or built-in)
-- [ ] Implement model loading and inference pipeline
-- [ ] Implement as a new backend behind the existing `LLMEvaluator` trait — HTTP and Burn coexist
-- [ ] Allow backend selection via config registry (e.g., `llm_backend: "burn"` vs `"http"`)
-- [ ] Benchmark inference latency vs. HTTP-based evaluator
-- [ ] Add tests with a small model or fixture weights
-- [ ] Document feature flag usage, backend selection, and model setup
+- [x] Research Burn's current model ecosystem — available architectures, ONNX import, tokenizer support
+- [x] Decide on target model(s): Qwen3.5-0.8B-Base, NVIDIA-Nemotron-3-Nano-4B-BF16
+
+#### Phase 1: Feature Flag, Shared Utilities, Stub Evaluator
+- [x] Add `burn`, `tokenizers`, `safetensors` workspace deps (burn 0.20.1, tokenizers 0.22.2, safetensors 0.7.0)
+- [x] Add `burn-llm` feature flag in `syara/Cargo.toml` (+ `burn-llm-gpu`)
+- [x] Extract `build_prompt`/`parse_response` as shared fns in `llm_evaluator.rs`
+- [x] Widen LLM feature gates to `any(feature = "llm", feature = "burn-llm")`
+- [x] Create stub `burn_evaluator.rs` implementing `LLMEvaluator`
+- [x] Wire into Registry in `config.rs`
+- [x] Verify: `cargo test`, `cargo test --features burn-llm`, `cargo test --features llm`
+
+#### Phase 2: Common Building Blocks in Burn
+- [ ] `burn_model/norm.rs` — RmsNorm
+- [ ] `burn_model/rope.rs` — RotaryEmbedding with partial_rotary_factor
+- [ ] `burn_model/attention.rs` — FullAttention (GQA + optional QK-norm)
+- [ ] `burn_model/ffn.rs` — FeedForward (gate/up/down + SiLU)
+- [ ] Unit tests for each block (shape checks, known-input verification)
+
+#### Phase 3: Gated DeltaNet + Qwen3.5 Model Assembly
+- [ ] `burn_model/deltanet.rs` — Gated DeltaNet (recurrent mode)
+- [ ] `burn_model/qwen3.rs` — Qwen3Config, HybridBlock, Qwen3TextModel
+- [ ] Tests: forward pass, hybrid dispatch verification
+
+#### Phase 4: Weight Loading, Tokenizer, Inference Pipeline
+- [ ] `burn_model/loader.rs` — load_qwen3 from safetensors
+- [ ] `burn_model/generate.rs` — greedy_generate
+- [ ] Complete `BurnEvaluator::evaluate()` (tokenize → generate → parse)
+- [ ] Create test fixtures (tiny model + tokenizer)
+- [ ] Integration test with real Qwen3.5 model (`#[ignore]`)
+
+#### Phase 5: Nemotron Model, GPU Backend, Documentation
+- [ ] `burn_model/mamba.rs` — MambaBlock
+- [ ] `burn_model/nemotron.rs` — NemotronModel with hybrid pattern dispatch
+- [ ] Auto-detect model type from config.json
+- [ ] GPU backend via `burn-llm-gpu` feature
+- [ ] BurnEvaluatorBuilder API
+- [ ] Documentation and benchmarks
+- [ ] Full feature matrix verification

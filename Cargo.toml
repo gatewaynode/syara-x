@@ -21,4 +21,7 @@ indexmap = "2.6.0"
 reqwest = { version = "0.12.28", features = ["blocking", "json"], default-features = false }
 serde_json = "1.0.148"
 image = { version = "0.24.9", default-features = false, features = ["jpeg", "png"] }
+burn = { version = "0.20.1", default-features = false }
+tokenizers = { version = "0.22.2", default-features = false, features = ["onig"] }
+safetensors = "0.7.0"
 tempfile = "3.13.0"
