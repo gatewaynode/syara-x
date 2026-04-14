@@ -34,11 +34,11 @@ Adds local inference using [Burn](https://github.com/tracel-ai/burn) as an addit
 - [x] Verify: `cargo test`, `cargo test --features burn-llm`, `cargo test --features llm`
 
 #### Phase 2: Common Building Blocks in Burn
-- [ ] `burn_model/norm.rs` — RmsNorm
-- [ ] `burn_model/rope.rs` — RotaryEmbedding with partial_rotary_factor
-- [ ] `burn_model/attention.rs` — FullAttention (GQA + optional QK-norm)
-- [ ] `burn_model/ffn.rs` — FeedForward (gate/up/down + SiLU)
-- [ ] Unit tests for each block (shape checks, known-input verification)
+- [x] `burn_model/mod.rs` — Module declarations, re-exports
+- [x] `burn_model/attention.rs` — FullAttention (GQA + QK-norm + partial RoPE) — uses built-in RmsNorm/RotaryEncoding
+- [x] `burn_model/ffn.rs` — FeedForward (gate/up/down + SiLU)
+- [x] Unit tests for each block (shape checks, causal mask, partial RoPE, GQA repeat)
+- [x] No custom RmsNorm or RoPE needed — Burn has built-in modules
 
 #### Phase 3: Gated DeltaNet + Qwen3.5 Model Assembly
 - [ ] `burn_model/deltanet.rs` — Gated DeltaNet (recurrent mode)

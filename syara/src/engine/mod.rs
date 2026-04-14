@@ -14,6 +14,9 @@ pub mod llm_evaluator;
 #[cfg(feature = "burn-llm")]
 pub mod burn_evaluator;
 
+#[cfg(feature = "burn-llm")]
+pub(crate) mod burn_model;
+
 #[cfg(feature = "phash")]
 pub mod phash_matcher;
 
