@@ -1,14 +1,24 @@
 # syara-x
 
-**Super YARA in Rust** — extends YARA-compatible rules with semantic similarity,
+**Semantic YARA in Rust** — extends YARA-compatible rules with semantic similarity,
 ML classifier, LLM-based, and perceptual hash matching. Catches malicious
 content (prompt injection, phishing, jailbreaks) by meaning and intent, not
 just exact text patterns.
 
+Ported from [SYARA](https://github.com/nabeelxy/syara) originally written by
+Nabeel Yoosuf
+
 > This library was ported from Python to Rust by
 > [Claude](https://claude.ai/claude-code) (Anthropic's AI coding assistant),
-> working through six implementation phases under human direction.
+> working through six implementation phases under human direction, tested in a
+> larger implementation that includes working side by side with [YARA-X](https://github.com/VirusTotal/yara-x).
 > See [CONTRIBUTING.md](CONTRIBUTING.md) for how the project is maintained.
+
+**EXPERIMENTAL**: Do not use this for anything important yet.  I'm lazily commmiting
+directly to `main` some very speculative features that I'm not sure if Claude can
+pull off.  The 0.2 release will embed local LLM processing using [Burn](https://github.com/tracel-ai/burn-lm) that locally
+provides a couple of LLMs for rules, this is beyond my current capability and might
+be beyond Claude's.  Use at your own risk.
 
 ---
 
