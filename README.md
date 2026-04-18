@@ -29,7 +29,8 @@ be beyond Claude's.  Use at your own risk.
 | _(none)_ | String/regex matching, cleaners, chunkers |
 | `sbert` | Semantic similarity via HTTP embedding endpoint (OpenAI-compatible; Ollama variant preserved) |
 | `sbert-onnx` | Local ONNX MiniLM-L6-v2 backend (requires system `libonnxruntime` ≥1.17 — see [System dependencies](#system-dependencies)) |
-| `classifier` | ML text classifiers (implies `sbert`) |
+| `classifier` | ML text classifiers via OpenAI-compatible HTTP embeddings (implies `sbert`) |
+| `classifier-onnx` | Local ONNX classifier backend (recommended; implies `classifier` + `sbert-onnx`) |
 | `llm` | LLM-based evaluation via Ollama `/api/chat` |
 | `phash` | Perceptual hash matching for images, audio, and video |
 | `all` | All of the above |
@@ -100,6 +101,33 @@ rule semantic_phishing {
     condition:
         $sim1
 }
+```
+
+### Classifier (`classifier` / `classifier-onnx` features)
+
+```
+rule jailbreak_classifier {
+    classifier:
+        $c1 = {
+            pattern: "request to override AI safety guidelines"
+            threshold: 0.65
+            cleaner: default_cleaning
+            chunker: paragraph_chunking
+            classifier: tuned-sbert
+        }
+    condition:
+        $c1
+}
+```
+
+The default `tuned-sbert` classifier is registered against an OpenAI-compatible
+`/v1/embeddings` endpoint (`http://localhost:1234`). For deterministic, offline
+scoring use the local ONNX backend instead:
+
+```rust
+use syara_x::engine::classifier::OnnxEmbeddingClassifier;
+let cls = OnnxEmbeddingClassifier::from_dir("../models/all-MiniLM-L6-v2")?;
+rules.register_classifier("tuned-sbert", Box::new(cls));
 ```
 
 ### LLM evaluation (`llm` feature)
@@ -214,11 +242,11 @@ no external services.
 ## System dependencies
 
 Most features are pure-Rust and need nothing beyond `cargo`. The `sbert-onnx`
-feature is the exception — it links against the ONNX Runtime shared library at
-runtime (via `ort`'s `load-dynamic` mode) and will not run without it installed
-on the host.
+and `classifier-onnx` features are the exceptions — both link against the ONNX
+Runtime shared library at runtime (via `ort`'s `load-dynamic` mode) and will
+not run without it installed on the host.
 
-### `sbert-onnx` (ONNX Runtime ≥ 1.17)
+### `sbert-onnx` / `classifier-onnx` (ONNX Runtime ≥ 1.17)
 
 **macOS (Homebrew):**
 
@@ -238,7 +266,16 @@ point at the file.
 `ORT_DYLIB_PATH=/absolute/path/to/libonnxruntime.{dylib,so,dll}` before
 `cargo test` / `cargo run`.
 
-To fetch the MiniLM weights used by `integration_real_onnx_embed`:
+**Convenience wrapper:** for repeated use, run
+`./scripts/install_onnxruntime_xdg.sh` once to install
+`~/.local/bin/with-onnxruntime` (XDG user-bin). Then prefix any command:
+
+```bash
+with-onnxruntime cargo test --features classifier-onnx -- --ignored
+```
+
+The same MiniLM weights are reused by `integration_real_onnx_embed` and
+`integration_real_onnx_classifier`. To fetch them:
 
 ```bash
 ./scripts/fetch_minilm.sh       # downloads to <repo>/models/all-MiniLM-L6-v2/

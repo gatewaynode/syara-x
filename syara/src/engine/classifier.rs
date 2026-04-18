@@ -1,11 +1,19 @@
-//! ML classifier-based matching via HTTP embedding endpoints.
+//! ML classifier-based matching via HTTP or local ONNX embeddings.
 //!
-//! [`TextClassifier`] abstracts over classification backends.  Two built-in
-//! HTTP implementations mirror the `sbert` feature's matcher variants:
-//! [`OpenAiEmbeddingClassifier`] (OpenAI-compatible `/v1/embeddings`, default)
-//! and [`OllamaEmbeddingClassifier`] (Ollama `/api/embed`, preserved).
-//! Both compute cosine similarity between the rule pattern and each input
-//! chunk.
+//! [`TextClassifier`] abstracts over classification backends.  Three built-in
+//! implementations:
+//! - [`OpenAiEmbeddingClassifier`] — OpenAI-compatible `/v1/embeddings`,
+//!   registry default for `"tuned-sbert"` (works with LM Studio, vLLM,
+//!   llama-server, openai.com).
+//! - [`OllamaEmbeddingClassifier`] — Ollama `/api/embed` variant, preserved.
+//! - [`OnnxEmbeddingClassifier`] (`classifier-onnx` feature) — wraps the local
+//!   [`OnnxEmbeddingMatcher`](crate::engine::onnx_embedder::OnnxEmbeddingMatcher)
+//!   and runs MiniLM-L6-v2 (or any compatible sentence-transformer ONNX export)
+//!   in-process. Recommended for offline / deterministic deployments.
+//!
+//! All three compute cosine similarity between the rule pattern and each input
+//! chunk; threshold checks happen in the default
+//! [`classify_chunks`](TextClassifier::classify_chunks).
 //!
 //! Because `classifier` implies `sbert`, [`cosine_similarity`] is borrowed
 //! from the sibling module rather than duplicated.
@@ -114,6 +122,85 @@ impl OllamaEmbeddingClassifier {
 impl TextClassifier for OllamaEmbeddingClassifier {
     fn score(&self, rule_pattern: &str, input_text: &str) -> Result<f64, SyaraError> {
         http_score(&self.embedder, rule_pattern, input_text)
+    }
+}
+
+// ── Local ONNX implementation ─────────────────────────────────────────────────
+
+/// Classifier backed by a local ONNX embedding model (MiniLM-L6-v2 by default).
+///
+/// Composes [`OnnxEmbeddingMatcher`](crate::engine::onnx_embedder::OnnxEmbeddingMatcher)
+/// rather than duplicating its session/tokenizer plumbing — both compute
+/// pooled, L2-normalized embeddings, so the classifier just needs to embed
+/// `(rule_pattern, input_text)` and take the cosine.
+///
+/// Recommended over the HTTP backends when:
+/// - You need deterministic, network-free scoring (CI, air-gapped hosts).
+/// - You want to avoid the per-call HTTP round-trip overhead.
+/// - You already ship the ONNX model as part of the deployment.
+///
+/// Requires the `classifier-onnx` feature and the system `libonnxruntime`
+/// shared library at runtime — see the README's "System dependencies"
+/// section.
+///
+/// ```no_run
+/// # #[cfg(feature = "classifier-onnx")]
+/// # fn main() -> Result<(), syara_x::error::SyaraError> {
+/// use syara_x::compile_str;
+/// use syara_x::engine::classifier::OnnxEmbeddingClassifier;
+///
+/// let mut rules = compile_str(r#"
+/// rule local_classifier {
+///   classifier:
+///     $c = "phishing language" threshold=0.6 classifier="tuned-sbert"
+///   condition:
+///     $c
+/// }
+/// "#)?;
+/// let cls = OnnxEmbeddingClassifier::from_dir("../models/all-MiniLM-L6-v2")?;
+/// rules.register_classifier("tuned-sbert", Box::new(cls));
+/// # Ok(()) }
+/// # #[cfg(not(feature = "classifier-onnx"))] fn main() {}
+/// ```
+#[cfg(feature = "classifier-onnx")]
+pub struct OnnxEmbeddingClassifier {
+    embedder: crate::engine::onnx_embedder::OnnxEmbeddingMatcher,
+}
+
+#[cfg(feature = "classifier-onnx")]
+impl OnnxEmbeddingClassifier {
+    /// Load `model.onnx` + `tokenizer.json` from a directory.
+    pub fn from_dir(model_dir: impl AsRef<std::path::Path>) -> Result<Self, SyaraError> {
+        Ok(Self {
+            embedder: crate::engine::onnx_embedder::OnnxEmbeddingMatcher::from_dir(
+                model_dir,
+            )?,
+        })
+    }
+
+    /// Load from explicit model + tokenizer paths.
+    pub fn from_paths(
+        model: impl AsRef<std::path::Path>,
+        tokenizer: impl AsRef<std::path::Path>,
+    ) -> Result<Self, SyaraError> {
+        Ok(Self {
+            embedder: crate::engine::onnx_embedder::OnnxEmbeddingMatcher::from_paths(
+                model, tokenizer,
+            )?,
+        })
+    }
+}
+
+#[cfg(feature = "classifier-onnx")]
+impl TextClassifier for OnnxEmbeddingClassifier {
+    fn score(&self, rule_pattern: &str, input_text: &str) -> Result<f64, SyaraError> {
+        if rule_pattern.is_empty() || input_text.is_empty() {
+            return Ok(0.0);
+        }
+        use crate::engine::semantic_matcher::SemanticMatcher;
+        let pattern_emb = self.embedder.embed(rule_pattern)?;
+        let input_emb = self.embedder.embed(input_text)?;
+        Ok(f64::from(cosine_similarity(&pattern_emb, &input_emb)))
     }
 }
 

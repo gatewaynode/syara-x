@@ -9,7 +9,7 @@
 |---|---|---|---|
 | 1 | _(none)_ | Core: parser, condition AST, string matching, cleaners, chunkers, registry, cache, public API | ✅ Complete |
 | 2 | `sbert` / `sbert-onnx` | Semantic similarity (ONNX + HTTP embedding endpoint) | ✅ Complete |
-| 3 | `classifier` | ML text classifiers | ⬜ Pending |
+| 3 | `classifier` / `classifier-onnx` | ML text classifiers (HTTP + local ONNX) | ✅ Complete |
 | 4 | `llm` | HTTP LLM evaluators (OpenAI / Ollama) | ✅ Complete |
 | 5 | `burn-llm` / `burn-llm-gpu` | Local LLM inference (Qwen3 + Nemotron, CPU + GPU) | ⚠️ Fixture tests pass; real-model bugs (see below) |
 | 6 | `phash` | Perceptual image hashing (`image` crate + dHash) | ⬜ Pending |
@@ -116,9 +116,36 @@ Port the Python `engine/semantic_matcher.py` to Rust. Provides `SemanticMatcher`
 - `ort` uses `load-dynamic` → requires system `libonnxruntime` at runtime
   (macOS: `brew install onnxruntime` + set `ORT_DYLIB_PATH` — see README)
 
-### Phase 3: ML Classifiers (`classifier`)
+<!-- Phase 3 shipped 2026-04-18 — kept below for provenance, but it is complete. -->
 
-- [ ] _(to be scoped)_
+### Phase 3: ML Classifiers (`classifier` + `classifier-onnx`) ✅
+
+Port the Python `engine/classifier.py` to Rust. Provides `TextClassifier` trait
+plus three backends — two HTTP variants and a local ONNX backend that composes
+the Phase 2 `OnnxEmbeddingMatcher` so we don't duplicate ~200 lines of inference
+plumbing.
+
+- [x] `TextClassifier` trait + default `classify_chunks` (threshold + `MatchDetail`) — `engine/classifier.rs`
+- [x] `OpenAiEmbeddingClassifier` (registry default for `"tuned-sbert"`) + `OllamaEmbeddingClassifier` HTTP backends, both reusing the shared `HttpEmbedder`
+- [x] `OnnxEmbeddingClassifier` behind the `classifier-onnx` feature, wraps `OnnxEmbeddingMatcher::embed` + cosine
+- [x] `Cargo.toml`: `classifier-onnx = ["classifier", "sbert-onnx"]`; included in `all`
+- [x] Registry wiring (`get_classifier` / `register_classifier`) — `config.rs`
+- [x] Cost-ordered execution slot 4 in `compiled_rules.rs::execute_classifier`; pattern-map seeded for `is_identifier_needed`
+- [x] Parser `parse_classifier_section` (threshold/cleaner/chunker/classifier params)
+- [x] Public `CompiledRules::register_classifier` API
+- [x] 6 module/cross-module unit tests passing
+- [x] Integration test `tests/classifier_integration.rs` — deterministic `FixedClassifier` + 2 `#[ignore]` real-backend tests
+- [x] README: `classifier:` rule example + `classifier-onnx` row in feature table + System dependencies updated
+- [x] CLAUDE.md real-model test block: `integration_real_openai_classifier` + `integration_real_onnx_classifier`
+- [x] Real-backend tests run 2026-04-18:
+      - `integration_real_openai_classifier` ✅ (LM Studio nomic-embed)
+      - `integration_real_onnx_classifier` ✅ (local MiniLM-L6-v2; rule pattern aligned to MiniLM-friendly phrasing — see `project_phase3_progress.md`)
+- [x] `scripts/install_onnxruntime_xdg.sh` — installs `~/.local/bin/with-onnxruntime` wrapper for ergonomic ONNX-feature test runs
+
+**Known limitations (MVP):**
+- HTTP classifier shares the `HttpEmbedder` cache and timeouts with sbert — same retry posture (none, beyond reqwest defaults).
+- ONNX classifier inherits `max_length=256` from `OnnxEmbeddingMatcher`.
+- Python's `train()` threshold-calibration loop is intentionally not ported — Rust users tune the rule's `threshold` field directly. Re-evaluate if a real fine-tuning use case appears.
 
 ### Phase 6: Perceptual Hashing (`phash`)
 

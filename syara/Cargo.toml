@@ -30,11 +30,12 @@ default = []
 sbert = ["dep:reqwest", "dep:serde_json"]
 sbert-onnx = ["sbert", "dep:ort", "dep:ndarray", "dep:tokenizers"]
 classifier = ["sbert"]
+classifier-onnx = ["classifier", "sbert-onnx"]
 llm = ["dep:reqwest", "dep:serde_json"]
 phash = ["dep:image"]
 burn-llm = ["dep:burn", "dep:tokenizers", "dep:safetensors", "dep:serde_json"]
 burn-llm-gpu = ["burn-llm", "burn/wgpu"]
-all = ["sbert", "sbert-onnx", "classifier", "llm", "phash"]
+all = ["sbert", "sbert-onnx", "classifier", "classifier-onnx", "llm", "phash"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

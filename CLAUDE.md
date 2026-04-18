@@ -31,11 +31,13 @@ cargo doc --open                     # browse generated docs
 These load actual model weights / hit real services and take minutes to run, so they're gated behind `--ignored`:
 
 ```bash
-cargo test -p syara-x --features burn-llm   -- --ignored --nocapture integration_real_model          # Qwen3.5-0.8B
-cargo test -p syara-x --features burn-llm   -- --ignored --nocapture integration_real_nemotron       # Nemotron-3-Nano-4B
-cargo test -p syara-x --features sbert      -- --ignored --nocapture integration_real_openai_embed   # OpenAI-compatible /v1/embeddings (LM Studio / vLLM / openai.com)
-cargo test -p syara-x --features sbert      -- --ignored --nocapture integration_real_ollama_embed   # Ollama /api/embed
-cargo test -p syara-x --features sbert-onnx -- --ignored --nocapture integration_real_onnx_embed     # Local MiniLM-L6-v2 ONNX
+cargo test -p syara-x --features burn-llm        -- --ignored --nocapture integration_real_model               # Qwen3.5-0.8B
+cargo test -p syara-x --features burn-llm        -- --ignored --nocapture integration_real_nemotron            # Nemotron-3-Nano-4B
+cargo test -p syara-x --features sbert           -- --ignored --nocapture integration_real_openai_embed        # OpenAI-compatible /v1/embeddings (LM Studio / vLLM / openai.com)
+cargo test -p syara-x --features sbert           -- --ignored --nocapture integration_real_ollama_embed        # Ollama /api/embed
+cargo test -p syara-x --features sbert-onnx      -- --ignored --nocapture integration_real_onnx_embed          # Local MiniLM-L6-v2 ONNX (semantic matcher)
+cargo test -p syara-x --features classifier      -- --ignored --nocapture integration_real_openai_classifier   # OpenAI-compatible /v1/embeddings, classifier path
+cargo test -p syara-x --features classifier-onnx -- --ignored --nocapture integration_real_onnx_classifier     # Local MiniLM-L6-v2 ONNX (classifier)
 ```
 
 **After every major section of work that touches LLM / embedding / inference / model-loading code, ASK the user whether to run these real-model tests before declaring the section done.** The fixture tests catch shape bugs; only the real-model tests catch weight-loading and tokenizer regressions.
