@@ -1,8 +1,13 @@
 //! Semantic similarity matching via HTTP embedding endpoints.
 //!
-//! The [`SemanticMatcher`] trait abstracts over embedding providers.  The
-//! built-in [`HttpEmbeddingMatcher`] calls any Ollama-compatible `/api/embed`
-//! endpoint (POST `{"model": "…", "input": "…"}` → `{"embeddings": [[…]]}`).
+//! The [`SemanticMatcher`] trait abstracts over embedding providers.  Two
+//! built-in HTTP backends cover the dominant wire formats:
+//!
+//! - [`OpenAiEmbeddingMatcher`] — OpenAI `/v1/embeddings`
+//!   (`{"data":[{"embedding":[…]}]}`).  Also served by LM Studio, vLLM,
+//!   llama-server, Open WebUI, and openai.com.  This is the registry default.
+//! - [`OllamaEmbeddingMatcher`] — Ollama `/api/embed`
+//!   (`{"embeddings":[[…]]}`).  Preserved for existing Ollama deployments.
 //!
 //! Cosine similarity is computed in pure Rust; no ML crates are required at
 //! runtime — the heavy lifting is delegated to the embedding server.
@@ -82,29 +87,71 @@ pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
 }
 
-// ── HTTP implementation ───────────────────────────────────────────────────────
+// ── HTTP implementations ──────────────────────────────────────────────────────
 
-/// Calls an Ollama-compatible `/api/embed` HTTP endpoint.
+/// Calls an OpenAI-compatible `/v1/embeddings` HTTP endpoint.
 ///
+/// Accepts any server that speaks the OpenAI embeddings wire format: openai.com,
+/// LM Studio, vLLM, llama-server, Open WebUI, text-generation-inference, etc.
 /// Delegates to the shared [`super::HttpEmbedder`] which provides timeouts
 /// (BUG-011) and embedding caching (BUG-033).
 ///
-/// The `endpoint` and `model` can be changed at registration time via
-/// [`HttpEmbeddingMatcher::new`].  Default registration uses
-/// `http://localhost:11434/api/embed` with model `all-minilm`.
-pub struct HttpEmbeddingMatcher {
+/// Default registration (via [`crate::config::Registry::new`]) uses
+/// `http://localhost:1234/v1/embeddings` with model `text-embedding-3-small` —
+/// override either through [`OpenAiEmbeddingMatcher::new`] or by registering
+/// a replacement under the `"sbert"` name.
+pub struct OpenAiEmbeddingMatcher {
     embedder: super::HttpEmbedder,
 }
 
-impl HttpEmbeddingMatcher {
+impl OpenAiEmbeddingMatcher {
     pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
-            embedder: super::HttpEmbedder::new(endpoint, model),
+            embedder: super::HttpEmbedder::openai(endpoint, model),
         }
     }
 }
 
-impl SemanticMatcher for HttpEmbeddingMatcher {
+impl SemanticMatcher for OpenAiEmbeddingMatcher {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, SyaraError> {
+        self.embedder
+            .embed(text)
+            .map_err(SyaraError::SemanticError)
+    }
+}
+
+/// Calls an Ollama-compatible `/api/embed` HTTP endpoint
+/// (POST `{"model","input"}` → `{"embeddings":[[…]]}`).
+///
+/// Preserved for existing Ollama deployments; the OpenAI-shaped matcher is
+/// now the registry default.  Register explicitly to use:
+///
+/// ```no_run
+/// # #[cfg(feature = "sbert")] {
+/// use syara_x::engine::semantic_matcher::OllamaEmbeddingMatcher;
+/// let mut rules = syara_x::compile_str("").unwrap();
+/// rules.register_semantic_matcher(
+///     "sbert",
+///     Box::new(OllamaEmbeddingMatcher::new(
+///         "http://localhost:11434/api/embed",
+///         "all-minilm",
+///     )),
+/// );
+/// # }
+/// ```
+pub struct OllamaEmbeddingMatcher {
+    embedder: super::HttpEmbedder,
+}
+
+impl OllamaEmbeddingMatcher {
+    pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            embedder: super::HttpEmbedder::ollama(endpoint, model),
+        }
+    }
+}
+
+impl SemanticMatcher for OllamaEmbeddingMatcher {
     fn embed(&self, text: &str) -> Result<Vec<f32>, SyaraError> {
         self.embedder
             .embed(text)

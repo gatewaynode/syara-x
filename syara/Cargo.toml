@@ -22,16 +22,19 @@ image = { workspace = true, optional = true }
 burn = { workspace = true, optional = true, features = ["ndarray"] }
 tokenizers = { workspace = true, optional = true }
 safetensors = { workspace = true, optional = true }
+ort = { workspace = true, optional = true }
+ndarray = { workspace = true, optional = true }
 
 [features]
 default = []
 sbert = ["dep:reqwest", "dep:serde_json"]
+sbert-onnx = ["sbert", "dep:ort", "dep:ndarray", "dep:tokenizers"]
 classifier = ["sbert"]
 llm = ["dep:reqwest", "dep:serde_json"]
 phash = ["dep:image"]
 burn-llm = ["dep:burn", "dep:tokenizers", "dep:safetensors", "dep:serde_json"]
 burn-llm-gpu = ["burn-llm", "burn/wgpu"]
-all = ["sbert", "classifier", "llm", "phash"]
+all = ["sbert", "sbert-onnx", "classifier", "llm", "phash"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

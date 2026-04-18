@@ -81,10 +81,17 @@ impl FullAttentionConfig {
 
         let rotary_dim =
             (self.head_dim as f64 * self.partial_rotary_factor).floor() as usize;
-        // RotaryEncoding expects the rotary dimension (not full head_dim)
-        let rope = RotaryEncodingConfig::new(self.max_seq_len, rotary_dim)
-            .with_theta(self.rope_theta)
-            .init(device);
+        // RotaryEncoding expects the rotary dimension (not full head_dim).
+        // When rotary_dim=0 (e.g. Nemotron), skip RoPE entirely.
+        let rope = if rotary_dim > 0 {
+            Some(
+                RotaryEncodingConfig::new(self.max_seq_len, rotary_dim)
+                    .with_theta(self.rope_theta)
+                    .init(device),
+            )
+        } else {
+            None
+        };
 
         FullAttention {
             q_proj,
@@ -115,7 +122,7 @@ pub struct FullAttention<B: Backend> {
     pub(crate) o_proj: Linear<B>,
     pub(crate) q_norm: Option<RmsNorm<B>>,
     pub(crate) k_norm: Option<RmsNorm<B>>,
-    pub(crate) rope: RotaryEncoding<B>,
+    pub(crate) rope: Option<RotaryEncoding<B>>,
     pub(crate) n_heads: usize,
     pub(crate) n_kv_heads: usize,
     pub(crate) head_dim: usize,
@@ -204,17 +211,18 @@ impl<B: Backend> FullAttention<B> {
     ///
     /// Input: `[batch, n_heads, seq_len, head_dim]`
     fn apply_partial_rope(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
-        if self.rotary_dim == 0 {
-            return x;
-        }
+        let rope = match &self.rope {
+            Some(r) => r,
+            None => return x, // rotary_dim == 0 (e.g. Nemotron)
+        };
         if self.rotary_dim == self.head_dim {
-            return self.rope.forward(x);
+            return rope.forward(x);
         }
         // Split into rotary and pass-through portions along the last dim
         let rotary_part = x.clone().narrow(3, 0, self.rotary_dim);
         let pass_through = x.narrow(3, self.rotary_dim, self.head_dim - self.rotary_dim);
 
-        let rotary_part = self.rope.forward(rotary_part);
+        let rotary_part = rope.forward(rotary_part);
         Tensor::cat(vec![rotary_part, pass_through], 3)
     }
 

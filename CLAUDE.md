@@ -26,6 +26,20 @@ cargo clippy -- -D warnings          # lint (must be clean)
 cargo doc --open                     # browse generated docs
 ```
 
+### Real-model tests (opt-in, `#[ignore]` by default)
+
+These load actual model weights / hit real services and take minutes to run, so they're gated behind `--ignored`:
+
+```bash
+cargo test -p syara-x --features burn-llm   -- --ignored --nocapture integration_real_model          # Qwen3.5-0.8B
+cargo test -p syara-x --features burn-llm   -- --ignored --nocapture integration_real_nemotron       # Nemotron-3-Nano-4B
+cargo test -p syara-x --features sbert      -- --ignored --nocapture integration_real_openai_embed   # OpenAI-compatible /v1/embeddings (LM Studio / vLLM / openai.com)
+cargo test -p syara-x --features sbert      -- --ignored --nocapture integration_real_ollama_embed   # Ollama /api/embed
+cargo test -p syara-x --features sbert-onnx -- --ignored --nocapture integration_real_onnx_embed     # Local MiniLM-L6-v2 ONNX
+```
+
+**After every major section of work that touches LLM / embedding / inference / model-loading code, ASK the user whether to run these real-model tests before declaring the section done.** The fixture tests catch shape bugs; only the real-model tests catch weight-loading and tokenizer regressions.
+
 ## Architecture
 
 Data flows linearly: `.syara file` → `SyaraParser` → `Vec<Rule>` → `Compiler` → `CompiledRules` → `scan(text)` / `scan_file(path)` → `Vec<Match>`
@@ -74,12 +88,15 @@ Data flows linearly: `.syara file` → `SyaraParser` → `Vec<Rule>` → `Compil
 
 ### Porting phases
 
-- **Phase 1** ✅ Core (no ML): parser, condition AST, string matching, cleaners, chunkers, registry, cache, public API
-- **Phase 2** `[feature=sbert]` semantic similarity (ONNX or HTTP embedding endpoint)
-- **Phase 3** `[feature=classifier]` ML classifiers
-- **Phase 4** `[feature=llm]` OpenAI / Ollama HTTP evaluators
-- **Phase 5** `[feature=phash]` perceptual image hashing (`image` crate + dHash)
-- **Phase 6** `[capi]` C FFI via `cbindgen`
+Authoritative phase numbering lives in `tasks/todo.md` — this is just a quick feature-area reference.
+
+- Core (no ML) ✅ — parser, condition AST, string matching, cleaners, chunkers, registry, cache, public API
+- `sbert` — semantic similarity (ONNX or HTTP embedding endpoint)
+- `classifier` — ML classifiers
+- `llm` ✅ — OpenAI / Ollama HTTP evaluators
+- `burn-llm` / `burn-llm-gpu` ✅ — local LLM inference (Qwen3 + Nemotron, CPU + GPU backends)
+- `phash` — perceptual image hashing (`image` crate + dHash)
+- `capi` — C FFI via `cbindgen`
 
 ## Workflow Orchestration
 

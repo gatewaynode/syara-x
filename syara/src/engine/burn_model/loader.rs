@@ -1,7 +1,7 @@
-//! Safetensors weight loading for Qwen3.5 models.
+//! Safetensors weight loading for Qwen3.5 and Nemotron models.
 //!
-//! Reads `config.json` for model dimensions, then loads weights from
-//! `.safetensors` files into a [`Qwen3TextModel`].
+//! Shared helpers for loading `.safetensors` weights into Burn modules.
+//! Model-specific config parsing lives in `qwen3.rs` and `nemotron.rs`.
 
 use std::path::Path;
 
@@ -10,102 +10,53 @@ use burn::prelude::*;
 use safetensors::tensor::SafeTensors;
 use safetensors::Dtype;
 
+use super::mamba::MambaRMSNormGated;
+use super::nemotron::{NemotronConfig, NemotronMixer, NemotronModel};
 use super::qwen3::{HybridBlock, Qwen3Config, Qwen3TextModel};
 use crate::error::SyaraError;
 
-// ── Config JSON deserialization ─────────────────────────────────────────────
+// ── Architecture detection ─────────────────────────────────────────────────
 
-/// Top-level config.json structure (only fields we need).
-#[derive(serde::Deserialize)]
-struct RawModelConfig {
-    text_config: RawTextConfig,
+/// Detected model architecture from config.json.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelArch {
+    Qwen3,
+    Nemotron,
 }
 
-#[derive(serde::Deserialize)]
-struct RawTextConfig {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    head_dim: usize,
-    linear_num_key_heads: usize,
-    linear_num_value_heads: usize,
-    linear_key_head_dim: usize,
-    linear_value_head_dim: usize,
-    #[serde(default = "default_conv_kernel")]
-    linear_conv_kernel_dim: usize,
-    #[serde(default = "default_full_attn_interval")]
-    full_attention_interval: usize,
-    #[serde(default = "default_max_pos")]
-    max_position_embeddings: usize,
-    #[serde(default = "default_rms_norm_eps")]
-    rms_norm_eps: f64,
-    #[serde(default = "default_tie")]
-    tie_word_embeddings: bool,
-    #[serde(default = "default_eos")]
-    eos_token_id: usize,
-    #[serde(default)]
-    rope_parameters: Option<RopeParameters>,
-}
-
-#[derive(serde::Deserialize)]
-struct RopeParameters {
-    #[serde(default = "default_rope_theta")]
-    rope_theta: f32,
-    #[serde(default = "default_partial_rotary")]
-    partial_rotary_factor: f64,
-}
-
-fn default_conv_kernel() -> usize { 4 }
-fn default_full_attn_interval() -> usize { 4 }
-fn default_max_pos() -> usize { 4096 }
-fn default_rms_norm_eps() -> f64 { 1e-6 }
-fn default_tie() -> bool { true }
-fn default_eos() -> usize { 248044 }
-fn default_rope_theta() -> f32 { 10_000_000.0 }
-fn default_partial_rotary() -> f64 { 0.25 }
-
-// ── Public API ──────────────────────────────────────────────────────────────
-
-/// Parse `config.json` from `model_dir` into a [`Qwen3Config`].
-pub fn load_qwen3_config(model_dir: &Path) -> Result<Qwen3Config, SyaraError> {
+/// Detect the model architecture from `config.json` in `model_dir`.
+pub fn detect_model_arch(model_dir: &Path) -> Result<ModelArch, SyaraError> {
     let config_path = model_dir.join("config.json");
     let config_str = std::fs::read_to_string(&config_path).map_err(|e| {
         SyaraError::LlmError(format!("failed to read {}: {e}", config_path.display()))
     })?;
-    let raw: RawModelConfig = serde_json::from_str(&config_str).map_err(|e| {
+
+    #[derive(serde::Deserialize)]
+    struct ArchProbe {
+        #[serde(default)]
+        architectures: Vec<String>,
+    }
+
+    let probe: ArchProbe = serde_json::from_str(&config_str).map_err(|e| {
         SyaraError::LlmError(format!("failed to parse config.json: {e}"))
     })?;
-    let tc = raw.text_config;
-    let rope = tc.rope_parameters.unwrap_or(RopeParameters {
-        rope_theta: default_rope_theta(),
-        partial_rotary_factor: default_partial_rotary(),
-    });
 
-    Ok(Qwen3Config {
-        vocab_size: tc.vocab_size,
-        hidden_size: tc.hidden_size,
-        intermediate_size: tc.intermediate_size,
-        num_hidden_layers: tc.num_hidden_layers,
-        num_attention_heads: tc.num_attention_heads,
-        num_key_value_heads: tc.num_key_value_heads,
-        head_dim: tc.head_dim,
-        linear_num_key_heads: tc.linear_num_key_heads,
-        linear_num_value_heads: tc.linear_num_value_heads,
-        linear_key_head_dim: tc.linear_key_head_dim,
-        linear_value_head_dim: tc.linear_value_head_dim,
-        linear_conv_kernel_dim: tc.linear_conv_kernel_dim,
-        full_attention_interval: tc.full_attention_interval,
-        max_position_embeddings: tc.max_position_embeddings,
-        rope_theta: rope.rope_theta,
-        partial_rotary_factor: rope.partial_rotary_factor,
-        rms_norm_eps: tc.rms_norm_eps,
-        tie_word_embeddings: tc.tie_word_embeddings,
-        eos_token_id: tc.eos_token_id,
-    })
+    for arch in &probe.architectures {
+        if arch.contains("Qwen3") {
+            return Ok(ModelArch::Qwen3);
+        }
+        if arch.contains("NemotronH") {
+            return Ok(ModelArch::Nemotron);
+        }
+    }
+
+    Err(SyaraError::LlmError(format!(
+        "unrecognized architecture: {:?}",
+        probe.architectures
+    )))
 }
+
+// ── Public API ──────────────────────────────────────────────────────────────
 
 /// Load a Qwen3.5 model from safetensors files in `model_dir`.
 ///
@@ -174,6 +125,66 @@ pub fn load_qwen3<B: Backend>(
                     assign_rms_norm(&tensors, &format!("{ap}.k_norm.weight"), kn, device)?;
                 }
                 // RoPE cos/sin tables are computed, not loaded
+            }
+        }
+    }
+
+    Ok(model)
+}
+
+/// Load a Nemotron model from safetensors files in `model_dir`.
+pub fn load_nemotron<B: Backend>(
+    config: &NemotronConfig,
+    model_dir: &Path,
+    device: &B::Device,
+) -> Result<NemotronModel<B>, SyaraError> {
+    let mut model = config.init(device);
+
+    let safetensors_path = find_safetensors(model_dir)?;
+    let file_bytes = std::fs::read(&safetensors_path).map_err(|e| {
+        SyaraError::LlmError(format!("failed to read {}: {e}", safetensors_path.display()))
+    })?;
+    let tensors = SafeTensors::deserialize(&file_bytes).map_err(|e| {
+        SyaraError::LlmError(format!("failed to deserialize safetensors: {e}"))
+    })?;
+
+    // Global weights
+    assign_embedding(&tensors, "backbone.embeddings.weight", &mut model.embeddings, device)?;
+    assign_rms_norm(&tensors, "backbone.norm_f.weight", &mut model.norm_f, device)?;
+    if !config.tie_word_embeddings {
+        assign_linear(&tensors, "lm_head.weight", &mut model.lm_head, device)?;
+    }
+
+    // Per-layer weights
+    let pattern = config.parse_pattern();
+    for (i, mt) in pattern.iter().enumerate() {
+        let lp = format!("backbone.layers.{i}");
+        let block = &mut model.layers[i];
+
+        assign_rms_norm(&tensors, &format!("{lp}.norm.weight"), &mut block.norm, device)?;
+
+        match (&mut block.mixer, mt) {
+            (NemotronMixer::Mamba(m), _) => {
+                let mp = format!("{lp}.mixer");
+                assign_linear(&tensors, &format!("{mp}.in_proj.weight"), &mut m.in_proj, device)?;
+                assign_conv1d_with_bias(&tensors, &format!("{mp}.conv1d"), &mut m.conv1d, device)?;
+                assign_param_1d(&tensors, &format!("{mp}.A_log"), &mut m.a_log, device)?;
+                assign_param_1d(&tensors, &format!("{mp}.D"), &mut m.d_param, device)?;
+                assign_param_1d(&tensors, &format!("{mp}.dt_bias"), &mut m.dt_bias, device)?;
+                assign_mamba_norm(&tensors, &format!("{mp}.norm.weight"), &mut m.norm, device)?;
+                assign_linear(&tensors, &format!("{mp}.out_proj.weight"), &mut m.out_proj, device)?;
+            }
+            (NemotronMixer::Attention(a), _) => {
+                let mp = format!("{lp}.mixer");
+                assign_linear(&tensors, &format!("{mp}.q_proj.weight"), &mut a.q_proj, device)?;
+                assign_linear(&tensors, &format!("{mp}.k_proj.weight"), &mut a.k_proj, device)?;
+                assign_linear(&tensors, &format!("{mp}.v_proj.weight"), &mut a.v_proj, device)?;
+                assign_linear(&tensors, &format!("{mp}.o_proj.weight"), &mut a.o_proj, device)?;
+            }
+            (NemotronMixer::Mlp(m), _) => {
+                let mp = format!("{lp}.mixer");
+                assign_linear(&tensors, &format!("{mp}.up_proj.weight"), &mut m.up_proj, device)?;
+                assign_linear(&tensors, &format!("{mp}.down_proj.weight"), &mut m.down_proj, device)?;
             }
         }
     }
@@ -339,6 +350,34 @@ fn assign_conv1d<B: Backend>(
     Ok(())
 }
 
+/// Assign weight and bias to a `Conv1d` module (Nemotron Mamba uses biased conv1d).
+///
+/// Expects `{name_prefix}.weight` (3D) and `{name_prefix}.bias` (1D) tensors.
+fn assign_conv1d_with_bias<B: Backend>(
+    tensors: &SafeTensors<'_>,
+    name_prefix: &str,
+    conv: &mut burn::nn::conv::Conv1d<B>,
+    device: &B::Device,
+) -> Result<(), SyaraError> {
+    let t: Tensor<B, 3> = load_tensor(tensors, &format!("{name_prefix}.weight"), device)?;
+    conv.weight = Param::initialized(ParamId::new(), t);
+    let b: Tensor<B, 1> = load_tensor(tensors, &format!("{name_prefix}.bias"), device)?;
+    conv.bias = Some(Param::initialized(ParamId::new(), b));
+    Ok(())
+}
+
+/// Assign weight to a `MambaRMSNormGated` module.
+fn assign_mamba_norm<B: Backend>(
+    tensors: &SafeTensors<'_>,
+    name: &str,
+    norm: &mut MambaRMSNormGated<B>,
+    device: &B::Device,
+) -> Result<(), SyaraError> {
+    let t: Tensor<B, 1> = load_tensor(tensors, name, device)?;
+    norm.weight = Param::initialized(ParamId::new(), t);
+    Ok(())
+}
+
 /// Assign a 1D tensor to a `Param<Tensor<B, 1>>` (e.g., A_log, dt_bias).
 fn assign_param_1d<B: Backend>(
     tensors: &SafeTensors<'_>,
@@ -354,6 +393,7 @@ fn assign_param_1d<B: Backend>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::qwen3::load_qwen3_config;
     use std::path::PathBuf;
 
     #[test]
@@ -389,45 +429,6 @@ mod tests {
     }
 
     #[test]
-    fn load_config_from_real_model() {
-        let model_dir = PathBuf::from("../models/Qwen3.5-0.8B-Base");
-        if !model_dir.join("config.json").exists() {
-            return; // skip if model not downloaded
-        }
-        let config = load_qwen3_config(&model_dir).unwrap();
-        assert_eq!(config.vocab_size, 248320);
-        assert_eq!(config.hidden_size, 1024);
-        assert_eq!(config.num_hidden_layers, 24);
-        assert_eq!(config.num_attention_heads, 8);
-        assert_eq!(config.num_key_value_heads, 2);
-        assert_eq!(config.head_dim, 256);
-        assert_eq!(config.linear_num_key_heads, 16);
-        assert_eq!(config.linear_key_head_dim, 128);
-        assert_eq!(config.full_attention_interval, 4);
-        assert!((config.rope_theta - 10_000_000.0).abs() < 1.0);
-        assert!((config.partial_rotary_factor - 0.25).abs() < 1e-6);
-        assert!(config.tie_word_embeddings);
-        assert_eq!(config.eos_token_id, 248044);
-    }
-
-    #[test]
-    fn load_config_from_fixture() {
-        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/tiny-qwen");
-        let config = load_qwen3_config(&fixture_dir).unwrap();
-        assert_eq!(config.vocab_size, 256);
-        assert_eq!(config.hidden_size, 64);
-        assert_eq!(config.num_hidden_layers, 2);
-        assert_eq!(config.num_attention_heads, 4);
-        assert_eq!(config.num_key_value_heads, 2);
-        assert_eq!(config.head_dim, 16);
-        assert_eq!(config.linear_num_key_heads, 4);
-        assert_eq!(config.full_attention_interval, 2);
-        assert!((config.rope_theta - 10_000.0).abs() < 1.0);
-        assert_eq!(config.eos_token_id, 0);
-    }
-
-    #[test]
     fn load_model_from_fixture() {
         use burn::backend::NdArray;
         type B = NdArray<f32>;
@@ -448,5 +449,23 @@ mod tests {
         );
         let logits = model.forward(input);
         assert_eq!(logits.dims(), [1, 3, 256]);
+    }
+
+    #[test]
+    fn detect_arch_qwen3_fixture() {
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tiny-qwen");
+        let arch = detect_model_arch(&fixture_dir).unwrap();
+        assert_eq!(arch, ModelArch::Qwen3);
+    }
+
+    #[test]
+    fn detect_arch_nemotron_real() {
+        let model_dir = PathBuf::from("../models/NVIDIA-Nemotron-3-Nano-4B-BF16");
+        if !model_dir.join("config.json").exists() {
+            return;
+        }
+        let arch = detect_model_arch(&model_dir).unwrap();
+        assert_eq!(arch, ModelArch::Nemotron);
     }
 }

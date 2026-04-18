@@ -24,4 +24,6 @@ image = { version = "0.24.9", default-features = false, features = ["jpeg", "png
 burn = { version = "0.20.1", default-features = false }
 tokenizers = { version = "0.22.2", default-features = false, features = ["onig"] }
 safetensors = "0.7.0"
+ort = { version = "=2.0.0-rc.11", default-features = false, features = ["load-dynamic", "ndarray"] }
+ndarray = "=0.17.2"
 tempfile = "3.13.0"

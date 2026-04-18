@@ -11,10 +11,10 @@ use crate::engine::chunker::{
 use crate::error::SyaraError;
 
 #[cfg(feature = "sbert")]
-use crate::engine::semantic_matcher::{HttpEmbeddingMatcher, SemanticMatcher};
+use crate::engine::semantic_matcher::{OpenAiEmbeddingMatcher, SemanticMatcher};
 
 #[cfg(feature = "classifier")]
-use crate::engine::classifier::{HttpEmbeddingClassifier, TextClassifier};
+use crate::engine::classifier::{OpenAiEmbeddingClassifier, TextClassifier};
 
 #[cfg(any(feature = "llm", feature = "burn-llm"))]
 use crate::engine::llm_evaluator::LLMEvaluator;
@@ -78,21 +78,25 @@ impl Registry {
         self.chunkers
             .insert("word_chunking".into(), Box::new(WordChunker::new(100)));
 
+        // Default to an OpenAI-compatible `/v1/embeddings` endpoint — the
+        // wire format served by LM Studio, vLLM, llama-server, Open WebUI,
+        // and openai.com.  Users running Ollama can register
+        // `OllamaEmbeddingMatcher` explicitly under the `"sbert"` name.
         #[cfg(feature = "sbert")]
         self.semantic_matchers.insert(
             "sbert".into(),
-            Box::new(HttpEmbeddingMatcher::new(
-                "http://localhost:11434/api/embed",
-                "all-minilm",
+            Box::new(OpenAiEmbeddingMatcher::new(
+                "http://localhost:1234/v1/embeddings",
+                "text-embedding-3-small",
             )),
         );
 
         #[cfg(feature = "classifier")]
         self.classifiers.insert(
             "tuned-sbert".into(),
-            Box::new(HttpEmbeddingClassifier::new(
-                "http://localhost:11434/api/embed",
-                "all-minilm",
+            Box::new(OpenAiEmbeddingClassifier::new(
+                "http://localhost:1234/v1/embeddings",
+                "text-embedding-3-small",
             )),
         );
 

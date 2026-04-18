@@ -7,12 +7,15 @@
 //!
 //! Layer pattern: `[lin, lin, lin, full, lin, lin, lin, full, ...]`
 
+use std::path::Path;
+
 use burn::nn::{Embedding, EmbeddingConfig, RmsNorm, RmsNormConfig};
 use burn::prelude::*;
 
 use super::attention::{FullAttention, FullAttentionConfig};
 use super::deltanet::{GatedDeltaNet, GatedDeltaNetConfig};
 use super::ffn::{FeedForward, FeedForwardConfig};
+use crate::error::SyaraError;
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -231,6 +234,98 @@ impl<B: Backend> Qwen3TextModel<B> {
     }
 }
 
+// ── Config JSON deserialization ─────────────────────────────────────────────
+
+/// Top-level config.json structure for Qwen3 (wrapped in `text_config`).
+#[derive(serde::Deserialize)]
+struct RawModelConfig {
+    text_config: RawTextConfig,
+}
+
+#[derive(serde::Deserialize)]
+struct RawTextConfig {
+    vocab_size: usize,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    head_dim: usize,
+    linear_num_key_heads: usize,
+    linear_num_value_heads: usize,
+    linear_key_head_dim: usize,
+    linear_value_head_dim: usize,
+    #[serde(default = "default_conv_kernel")]
+    linear_conv_kernel_dim: usize,
+    #[serde(default = "default_full_attn_interval")]
+    full_attention_interval: usize,
+    #[serde(default = "default_max_pos")]
+    max_position_embeddings: usize,
+    #[serde(default = "default_rms_norm_eps")]
+    rms_norm_eps: f64,
+    #[serde(default = "default_tie")]
+    tie_word_embeddings: bool,
+    #[serde(default = "default_eos")]
+    eos_token_id: usize,
+    #[serde(default)]
+    rope_parameters: Option<RopeParameters>,
+}
+
+#[derive(serde::Deserialize)]
+struct RopeParameters {
+    #[serde(default = "default_rope_theta")]
+    rope_theta: f32,
+    #[serde(default = "default_partial_rotary")]
+    partial_rotary_factor: f64,
+}
+
+fn default_conv_kernel() -> usize { 4 }
+fn default_full_attn_interval() -> usize { 4 }
+fn default_max_pos() -> usize { 4096 }
+fn default_rms_norm_eps() -> f64 { 1e-6 }
+fn default_tie() -> bool { true }
+fn default_eos() -> usize { 248044 }
+fn default_rope_theta() -> f32 { 10_000_000.0 }
+fn default_partial_rotary() -> f64 { 0.25 }
+
+/// Parse `config.json` from `model_dir` into a [`Qwen3Config`].
+pub fn load_qwen3_config(model_dir: &Path) -> Result<Qwen3Config, SyaraError> {
+    let config_path = model_dir.join("config.json");
+    let config_str = std::fs::read_to_string(&config_path).map_err(|e| {
+        SyaraError::LlmError(format!("failed to read {}: {e}", config_path.display()))
+    })?;
+    let raw: RawModelConfig = serde_json::from_str(&config_str).map_err(|e| {
+        SyaraError::LlmError(format!("failed to parse config.json: {e}"))
+    })?;
+    let tc = raw.text_config;
+    let rope = tc.rope_parameters.unwrap_or(RopeParameters {
+        rope_theta: default_rope_theta(),
+        partial_rotary_factor: default_partial_rotary(),
+    });
+
+    Ok(Qwen3Config {
+        vocab_size: tc.vocab_size,
+        hidden_size: tc.hidden_size,
+        intermediate_size: tc.intermediate_size,
+        num_hidden_layers: tc.num_hidden_layers,
+        num_attention_heads: tc.num_attention_heads,
+        num_key_value_heads: tc.num_key_value_heads,
+        head_dim: tc.head_dim,
+        linear_num_key_heads: tc.linear_num_key_heads,
+        linear_num_value_heads: tc.linear_num_value_heads,
+        linear_key_head_dim: tc.linear_key_head_dim,
+        linear_value_head_dim: tc.linear_value_head_dim,
+        linear_conv_kernel_dim: tc.linear_conv_kernel_dim,
+        full_attention_interval: tc.full_attention_interval,
+        max_position_embeddings: tc.max_position_embeddings,
+        rope_theta: rope.rope_theta,
+        partial_rotary_factor: rope.partial_rotary_factor,
+        rms_norm_eps: tc.rms_norm_eps,
+        tie_word_embeddings: tc.tie_word_embeddings,
+        eos_token_id: tc.eos_token_id,
+    })
+}
+
 impl<B: Backend> super::ForwardModel<B> for Qwen3TextModel<B> {
     fn forward(&self, input_ids: Tensor<B, 2, Int>) -> Tensor<B, 3> {
         self.forward(input_ids)
@@ -327,5 +422,18 @@ mod tests {
         let logits = model.forward(input_ids);
         // Last dim must be vocab_size
         assert_eq!(logits.dims()[2], 256);
+    }
+
+    #[test]
+    fn load_config_from_fixture() {
+        let fixture_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tiny-qwen");
+        let config = load_qwen3_config(&fixture_dir).unwrap();
+        assert_eq!(config.vocab_size, 256);
+        assert_eq!(config.hidden_size, 64);
+        assert_eq!(config.num_hidden_layers, 2);
+        assert_eq!(config.head_dim, 16);
+        assert_eq!(config.full_attention_interval, 2);
+        assert_eq!(config.eos_token_id, 0);
     }
 }

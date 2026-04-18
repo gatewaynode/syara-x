@@ -1,3 +1,5 @@
+#![allow(dead_code)] // consumed by NemotronModel + loader in Phase 5
+
 //! Mamba2 SSM block for Nemotron hybrid models.
 //!
 //! Implements the Mamba2 selective state-space model in recurrent (sequential)
@@ -222,6 +224,7 @@ impl<B: Backend> Mamba2Block<B> {
     /// state = dA * state + dt * B * x
     /// y = (state * C).sum(state_dim) + D * x
     /// ```
+    #[allow(clippy::too_many_arguments)]
     fn ssm_scan(
         &self,
         x_ssm: Tensor<B, 3>,  // [batch, seq, inter]

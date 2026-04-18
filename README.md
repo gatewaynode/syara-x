@@ -16,7 +16,7 @@ Nabeel Yoosuf
 
 **EXPERIMENTAL**: Do not use this for anything important yet.  I'm lazily commmiting
 directly to `main` some very speculative features that I'm not sure if Claude can
-pull off.  The 0.2 release will embed local LLM processing using [Burn](https://github.com/tracel-ai/burn-lm) that locally
+pull off.  The 0.2 release will embed local LLM processing using [Burn](https://github.com/tracel-ai/burn) that locally
 provides a couple of LLMs for rules, this is beyond my current capability and might
 be beyond Claude's.  Use at your own risk.
 
@@ -27,7 +27,8 @@ be beyond Claude's.  Use at your own risk.
 | Feature flag | Capability |
 |---|---|
 | _(none)_ | String/regex matching, cleaners, chunkers |
-| `sbert` | Semantic similarity via HTTP embedding endpoint (Ollama) |
+| `sbert` | Semantic similarity via HTTP embedding endpoint (OpenAI-compatible; Ollama variant preserved) |
+| `sbert-onnx` | Local ONNX MiniLM-L6-v2 backend (requires system `libonnxruntime` ≥1.17 — see [System dependencies](#system-dependencies)) |
 | `classifier` | ML text classifiers (implies `sbert`) |
 | `llm` | LLM-based evaluation via Ollama `/api/chat` |
 | `phash` | Perceptual hash matching for images, audio, and video |
@@ -207,6 +208,41 @@ cargo clippy -- -D warnings          # lint (must be clean)
 External services (Ollama) are only contacted when the corresponding feature
 is enabled and a rule actually exercises that matcher. String-only rules need
 no external services.
+
+---
+
+## System dependencies
+
+Most features are pure-Rust and need nothing beyond `cargo`. The `sbert-onnx`
+feature is the exception — it links against the ONNX Runtime shared library at
+runtime (via `ort`'s `load-dynamic` mode) and will not run without it installed
+on the host.
+
+### `sbert-onnx` (ONNX Runtime ≥ 1.17)
+
+**macOS (Homebrew):**
+
+```bash
+brew install onnxruntime
+# Homebrew installs to /opt/homebrew/lib, which dlopen does NOT search by default —
+# point ort at the dylib explicitly:
+export ORT_DYLIB_PATH="$(brew --prefix onnxruntime)/lib/libonnxruntime.dylib"
+```
+
+**Linux (Debian/Ubuntu):** download the matching release from
+[microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases)
+and place `libonnxruntime.so` on your loader path, or set `ORT_DYLIB_PATH` to
+point at the file.
+
+**Any platform (escape hatch):** point `ort` at a specific dylib by exporting
+`ORT_DYLIB_PATH=/absolute/path/to/libonnxruntime.{dylib,so,dll}` before
+`cargo test` / `cargo run`.
+
+To fetch the MiniLM weights used by `integration_real_onnx_embed`:
+
+```bash
+./scripts/fetch_minilm.sh       # downloads to <repo>/models/all-MiniLM-L6-v2/
+```
 
 ---
 

@@ -1,9 +1,11 @@
 //! ML classifier-based matching via HTTP embedding endpoints.
 //!
-//! [`TextClassifier`] abstracts over classification backends. The built-in
-//! [`HttpEmbeddingClassifier`] reuses the same Ollama-compatible `/api/embed`
-//! endpoint as the `sbert` feature, computing cosine similarity between the
-//! rule pattern and each input chunk.
+//! [`TextClassifier`] abstracts over classification backends.  Two built-in
+//! HTTP implementations mirror the `sbert` feature's matcher variants:
+//! [`OpenAiEmbeddingClassifier`] (OpenAI-compatible `/v1/embeddings`, default)
+//! and [`OllamaEmbeddingClassifier`] (Ollama `/api/embed`, preserved).
+//! Both compute cosine similarity between the rule pattern and each input
+//! chunk.
 //!
 //! Because `classifier` implies `sbert`, [`cosine_similarity`] is borrowed
 //! from the sibling module rather than duplicated.
@@ -54,40 +56,64 @@ pub trait TextClassifier: Send + Sync {
     }
 }
 
-// ── HTTP implementation ───────────────────────────────────────────────────────
+// ── HTTP implementations ──────────────────────────────────────────────────────
 
-/// Classifier backed by an Ollama-compatible `/api/embed` HTTP endpoint.
+fn http_score(
+    embedder: &super::HttpEmbedder,
+    rule_pattern: &str,
+    input_text: &str,
+) -> Result<f64, SyaraError> {
+    if rule_pattern.is_empty() || input_text.is_empty() {
+        return Ok(0.0);
+    }
+    let pattern_emb = embedder
+        .embed(rule_pattern)
+        .map_err(SyaraError::ClassifierError)?;
+    let input_emb = embedder
+        .embed(input_text)
+        .map_err(SyaraError::ClassifierError)?;
+    Ok(f64::from(cosine_similarity(&pattern_emb, &input_emb)))
+}
+
+/// Classifier backed by an OpenAI-compatible `/v1/embeddings` HTTP endpoint.
 ///
-/// Delegates embedding to the shared [`super::HttpEmbedder`] which provides
-/// timeouts (BUG-011) and caching (BUG-033).  Default registration uses
-/// `http://localhost:11434/api/embed` with model `all-minilm` (same endpoint
-/// as the built-in `sbert` semantic matcher).
-pub struct HttpEmbeddingClassifier {
+/// Registry default for the `"tuned-sbert"` name.  Swap in the Ollama variant
+/// via [`crate::compiled_rules::CompiledRules::register_classifier`] if your
+/// embedding server speaks the Ollama wire format instead.
+pub struct OpenAiEmbeddingClassifier {
     embedder: super::HttpEmbedder,
 }
 
-impl HttpEmbeddingClassifier {
+impl OpenAiEmbeddingClassifier {
     pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
-            embedder: super::HttpEmbedder::new(endpoint, model),
+            embedder: super::HttpEmbedder::openai(endpoint, model),
         }
-    }
-
-    fn embed(&self, text: &str) -> Result<Vec<f32>, SyaraError> {
-        self.embedder
-            .embed(text)
-            .map_err(SyaraError::ClassifierError)
     }
 }
 
-impl TextClassifier for HttpEmbeddingClassifier {
+impl TextClassifier for OpenAiEmbeddingClassifier {
     fn score(&self, rule_pattern: &str, input_text: &str) -> Result<f64, SyaraError> {
-        if rule_pattern.is_empty() || input_text.is_empty() {
-            return Ok(0.0);
+        http_score(&self.embedder, rule_pattern, input_text)
+    }
+}
+
+/// Classifier backed by an Ollama-compatible `/api/embed` HTTP endpoint.
+pub struct OllamaEmbeddingClassifier {
+    embedder: super::HttpEmbedder,
+}
+
+impl OllamaEmbeddingClassifier {
+    pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            embedder: super::HttpEmbedder::ollama(endpoint, model),
         }
-        let pattern_emb = self.embed(rule_pattern)?;
-        let input_emb = self.embed(input_text)?;
-        Ok(f64::from(cosine_similarity(&pattern_emb, &input_emb)))
+    }
+}
+
+impl TextClassifier for OllamaEmbeddingClassifier {
+    fn score(&self, rule_pattern: &str, input_text: &str) -> Result<f64, SyaraError> {
+        http_score(&self.embedder, rule_pattern, input_text)
     }
 }
 

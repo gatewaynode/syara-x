@@ -12,6 +12,7 @@ pub mod ffn;
 pub mod generate;
 pub mod loader;
 pub mod mamba;
+pub mod nemotron;
 pub mod qwen3;
 
 /// Trait for models that can produce logits from input token IDs.
