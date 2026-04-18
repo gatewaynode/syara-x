@@ -12,7 +12,7 @@
 | 3 | `classifier` / `classifier-onnx` | ML text classifiers (HTTP + local ONNX) | ✅ Complete |
 | 4 | `llm` | HTTP LLM evaluators (OpenAI / Ollama) | ✅ Complete |
 | 5 | `burn-llm` / `burn-llm-gpu` | Local LLM inference (Qwen3 + Nemotron, CPU + GPU) | ⚠️ Fixture tests pass; real-model bugs (see below) |
-| 6 | `phash` | Perceptual image hashing (`image` crate + dHash) | ⬜ Pending |
+| 6 | `phash` | Perceptual image hashing (`image` crate + dHash) | ✅ Complete |
 | 7 | `capi` | C FFI via `cbindgen` | ⬜ Pending |
 
 ---
@@ -147,9 +147,44 @@ plumbing.
 - ONNX classifier inherits `max_length=256` from `OnnxEmbeddingMatcher`.
 - Python's `train()` threshold-calibration loop is intentionally not ported — Rust users tune the rule's `threshold` field directly. Re-evaluate if a real fine-tuning use case appears.
 
-### Phase 6: Perceptual Hashing (`phash`)
+<!-- Phase 6 shipped 2026-04-18 — kept below for provenance, but it is complete. -->
 
-- [ ] _(to be scoped)_ — `image` crate + dHash for image/audio/video perceptual hashing
+### Phase 6: Perceptual Hashing (`phash`) ✅
+
+Port the Python `engine/phash_matcher.py` to Rust. Provides `PHashMatcher`
+trait plus three backends — `ImageHashMatcher` (dHash via the `image` crate),
+`AudioHashMatcher` (pure-Rust WAV reader), `VideoHashMatcher` (byte-sampling
+fingerprint). The core engine landed in earlier porting passes; the
+2026-04-18 closeout brought it up to the Phase 2/3 standard.
+
+**Already complete (pre-closeout audit 2026-04-18):**
+
+- [x] `PHashMatcher` trait + default `match_rule` (`engine/phash_matcher.rs`, 604 lines)
+- [x] `ImageHashMatcher` — dHash, Lanczos resize, grayscale (`image` crate)
+- [x] `AudioHashMatcher` — RIFF/fmt/data chunk parser, multi-channel, BUG-014/015/029 fixes
+- [x] `VideoHashMatcher` — 65-sample byte fingerprint, zero external deps
+- [x] `PHashRule` model + `Default { threshold: 0.9, phash_name: "imagehash" }`
+- [x] Registry defaults (`imagehash` / `audiohash` / `videohash`) + `register_phash_matcher` API
+- [x] Cost slot 3 in `execute_phash`; `scan_file` reads file as text so string + phash can compose (BUG-008)
+- [x] Parser `parse_phash_section` (inline `hasher=` syntax) + `test_parse_phash`
+- [x] Compiler duplicate-identifier validation includes phash
+- [x] `Cargo.toml`: `phash = ["dep:image"]`; `image` pinned to 0.24.9
+- [x] 14 unit tests in `engine::phash_matcher::tests` passing
+
+**Closeout (this phase closes):**
+
+- [x] Integration test `tests/phash_integration.rs` — deterministic `FixedHashMatcher` + 2 `#[ignore]` real-backend tests (done 2026-04-18)
+- [x] `[dev-dependencies]` += `image` so integration tests can synthesize PNGs at runtime (done 2026-04-18)
+- [x] README: replace broken YAML-block `phash:` example with inline `hasher="..."` syntax that matches the parser (done 2026-04-18)
+- [x] CLAUDE.md real-model test block: add `integration_real_image_phash` + `integration_real_wav_phash` rows (done 2026-04-18)
+- [x] Real-backend tests run 2026-04-18:
+      - `integration_real_image_phash` ✅ (generated 32×32 PNGs via `image` crate; identical → match, inverted → miss)
+      - `integration_real_wav_phash` ✅ (synthesized 128-sample 16-bit mono PCM WAV; identical → match)
+
+**Design notes:**
+
+- Real-backend tests synthesize their inputs in a tempdir so the repo does not grow committed binary fixtures.
+- Parser grammar is single-line (`$id = "<file_path>" key=value key="value"`), not YAML-block; parameter name is `hasher=`, not `phash=` (the `phash:` section header is the block name, but the matcher-selection key inside the rule is `hasher=`).
 
 ### Phase 7: C FFI (`capi`)
 

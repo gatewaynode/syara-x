@@ -39,3 +39,4 @@ all = ["sbert", "sbert-onnx", "classifier", "classifier-onnx", "llm", "phash"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+image = { workspace = true }

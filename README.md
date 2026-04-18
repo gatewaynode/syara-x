@@ -151,11 +151,7 @@ rule llm_jailbreak {
 ```
 rule known_malware_image {
     phash:
-        $ph1 = {
-            file_path: "/path/to/reference.png"
-            threshold: 0.95
-            phash: imagehash
-        }
+        $ph1 = "/path/to/reference.png" threshold=0.95 hasher="imagehash"
     condition:
         $ph1
 }

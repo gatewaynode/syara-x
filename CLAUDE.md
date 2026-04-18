@@ -38,6 +38,8 @@ cargo test -p syara-x --features sbert           -- --ignored --nocapture integr
 cargo test -p syara-x --features sbert-onnx      -- --ignored --nocapture integration_real_onnx_embed          # Local MiniLM-L6-v2 ONNX (semantic matcher)
 cargo test -p syara-x --features classifier      -- --ignored --nocapture integration_real_openai_classifier   # OpenAI-compatible /v1/embeddings, classifier path
 cargo test -p syara-x --features classifier-onnx -- --ignored --nocapture integration_real_onnx_classifier     # Local MiniLM-L6-v2 ONNX (classifier)
+cargo test -p syara-x --features phash           -- --ignored --nocapture integration_real_image_phash         # generated PNG via image crate
+cargo test -p syara-x --features phash           -- --ignored --nocapture integration_real_wav_phash           # generated PCM WAV
 ```
 
 **After every major section of work that touches LLM / embedding / inference / model-loading code, ASK the user whether to run these real-model tests before declaring the section done.** The fixture tests catch shape bugs; only the real-model tests catch weight-loading and tokenizer regressions.
