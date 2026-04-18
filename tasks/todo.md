@@ -13,7 +13,7 @@
 | 4 | `llm` | HTTP LLM evaluators (OpenAI / Ollama) | ✅ Complete |
 | 5 | `burn-llm` / `burn-llm-gpu` | Local LLM inference (Qwen3 + Nemotron, CPU + GPU) | ⚠️ Fixture tests pass; real-model bugs (see below) |
 | 6 | `phash` | Perceptual image hashing (`image` crate + dHash) | ✅ Complete |
-| 7 | `capi` | C FFI via `cbindgen` | ⬜ Pending |
+| 7 | `capi` | C FFI via `cbindgen` | ✅ Complete |
 
 ---
 
@@ -186,6 +186,42 @@ fingerprint). The core engine landed in earlier porting passes; the
 - Real-backend tests synthesize their inputs in a tempdir so the repo does not grow committed binary fixtures.
 - Parser grammar is single-line (`$id = "<file_path>" key=value key="value"`), not YAML-block; parameter name is `hasher=`, not `phash=` (the `phash:` section header is the block name, but the matcher-selection key inside the rule is `hasher=`).
 
-### Phase 7: C FFI (`capi`)
+<!-- Phase 7 shipped 2026-04-18 — kept below for provenance, but it is complete. -->
 
-- [ ] _(to be scoped)_ — `capi/` crate already stubbed, needs cbindgen integration
+### Phase 7: C FFI (`capi`) ✅
+
+Expose the `syara-x` library to C callers via cbindgen-generated headers and
+a combined `cdylib` + `staticlib`. The FFI surface, header generator, and
+unit tests all landed in earlier porting passes; the 2026-04-18 closeout
+brought it up to the Phase 2/3/6 standard.
+
+**Already complete (pre-closeout audit 2026-04-18):**
+
+- [x] `capi/Cargo.toml` — `crate-type = ["cdylib", "staticlib"]`, cbindgen 0.26.0 as build-dep
+- [x] `capi/build.rs` — inline cbindgen config (Language::C, `SYARA_X_H` include guard, documentation=true, tab_width=4)
+- [x] `capi/src/lib.rs` — 8 public `extern "C"` fns (`syara_compile_str` / `compile_file` / `scan` / `scan_file` / `rule_count` / `rules_free` / `matches_free` / `last_error`) + `SyaraStatus` enum + `SyaraRules` opaque handle + `SyaraMatchArray` (with stored `capacity`)
+- [x] Thread-local error store via `thread_local! RefCell<CString>`
+- [x] BUG-018 regression test — `SyaraMatchArray::capacity` roundtrips so `Vec::from_raw_parts` in `syara_matches_free` is sound
+- [x] BUG-030 regression test — `*out` is null-initialised on all error paths so callers see null instead of garbage
+- [x] `capi/syara_x.h` — checked-in, ~4.6 KB, matches API
+- [x] 11 unit tests in `capi/src/lib.rs::tests` all passing
+- [x] README C example (`README.md:182-203`) — verified to match the actual FFI
+
+**Closeout (this phase closes):**
+
+- [x] Integration test `capi/tests/ffi_integration.rs`:
+      - `header_matches_regenerated_cbindgen_output` (default) — regenerates the header in-process with the same cbindgen builder config as `build.rs`, diffs against the checked-in `capi/syara_x.h`; catches any drift from hand-edits
+      - `integration_real_c_link` (`#[ignore]`, Unix-only) — builds `libsyara_x_capi.a` via `cargo build --release`, writes a small C driver to a tempdir, invokes `cc` with platform-appropriate link flags (macOS: `-framework CoreFoundation -framework Security`; Linux: `-lpthread -ldl -lm`), runs the binary, asserts `HIT:r` in stdout
+- [x] `capi/Cargo.toml` `[dev-dependencies]` += `tempfile = { workspace = true }` and `cbindgen = "0.26.0"` (needed for the integration test)
+- [x] `capi/src/lib.rs:478` — one-line clippy fix: `0x1 as *mut T` → `std::ptr::dangling_mut::<T>()` (same non-null placeholder semantics, satisfies `manual_dangling_ptr`)
+- [x] CLAUDE.md crate-layout row: `(Phase 6)` → `(Phase 7)` for capi
+- [x] CLAUDE.md real-model-tests block: append `integration_real_c_link` row
+- [x] Real-backend test run 2026-04-18:
+      - `integration_real_c_link` ✅ (macOS, Apple `cc`, 6.34s including release build)
+
+**Design notes:**
+
+- The C-link test synthesises its `driver.c` at runtime in a tempdir — no committed `.c` fixture that would need its own maintenance.
+- `build.rs` unconditionally regenerates `capi/syara_x.h` on every `cargo build`, so the header drift test is tight: any divergence implies someone hand-edited the header (or the source) outside the normal build cycle.
+- The `#[ignore]` test is `#[cfg(unix)]`. Windows (MSVC) is deliberately out of scope for this closeout — would need a different link-flag set and a different `cc` detection path.
+- No `capi` feature-flag plumbing: `syara-x` is depended on with default features, so `phash` / `sbert` / `llm` C-level entry points are **not** wired up. If needed later, gate new `extern "C"` fns behind capi-local features that re-export syara-x's.

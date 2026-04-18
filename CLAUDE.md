@@ -40,6 +40,7 @@ cargo test -p syara-x --features classifier      -- --ignored --nocapture integr
 cargo test -p syara-x --features classifier-onnx -- --ignored --nocapture integration_real_onnx_classifier     # Local MiniLM-L6-v2 ONNX (classifier)
 cargo test -p syara-x --features phash           -- --ignored --nocapture integration_real_image_phash         # generated PNG via image crate
 cargo test -p syara-x --features phash           -- --ignored --nocapture integration_real_wav_phash           # generated PCM WAV
+cargo test -p syara-x-capi                       -- --ignored --nocapture integration_real_c_link             # C compiler + staticlib round-trip (Unix; needs system cc)
 ```
 
 **After every major section of work that touches LLM / embedding / inference / model-loading code, ASK the user whether to run these real-model tests before declaring the section done.** The fixture tests catch shape bugs; only the real-model tests catch weight-loading and tokenizer regressions.
@@ -53,7 +54,7 @@ Data flows linearly: `.syara file` → `SyaraParser` → `Vec<Rule>` → `Compil
 | Crate | Path | Purpose |
 |---|---|---|
 | `syara-x` | `syara/` | Main library |
-| `syara-x-capi` | `capi/` | C FFI stub (Phase 6) |
+| `syara-x-capi` | `capi/` | C FFI via cbindgen (Phase 7) |
 
 ### Key modules (`syara/src/`)
 

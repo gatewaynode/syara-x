@@ -17,3 +17,7 @@ syara-x = { workspace = true }
 
 [build-dependencies]
 cbindgen = "0.26.0"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+cbindgen = "0.26.0"

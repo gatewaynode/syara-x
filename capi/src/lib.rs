@@ -475,7 +475,7 @@ rule miss_rule {
     fn compile_error_nulls_out_ptr() {
         // BUG-030: *out must be null after a compile error, not garbage.
         let bad_src = CString::new("rule broken { condition: @invalid }").unwrap();
-        let mut ptr: *mut SyaraRules = 0x1 as *mut SyaraRules; // start non-null
+        let mut ptr: *mut SyaraRules = std::ptr::dangling_mut::<SyaraRules>(); // start non-null
         let status = unsafe { syara_compile_str(bad_src.as_ptr(), &mut ptr) };
         assert!(!matches!(status, SyaraStatus::SyaraOk));
         assert!(ptr.is_null(), "*out must be null on error");
