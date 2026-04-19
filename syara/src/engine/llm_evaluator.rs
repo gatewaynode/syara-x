@@ -123,7 +123,7 @@ pub(crate) fn parse_response(response: &str) -> (bool, String) {
 ///   (Qwen3, DeepSeek-R1, …) emit their answer only after a `<think>…</think>`
 ///   / `reasoning_content` block; if `max_tokens` cuts off mid-think, the
 ///   final `content` is empty and the `parse_response` path would silently
-///   return `Ambiguous LLM response:`.  BUG-029.
+///   return `Ambiguous LLM response:`.  BUG-035.
 /// - Empty `content` with any other finish reason → generic error.
 ///
 /// Non-empty `content` is returned even if `finish_reason == "length"` because
@@ -783,7 +783,7 @@ mod tests {
     #[test]
     #[cfg(feature = "llm")]
     fn openai_chat_default_max_tokens_fits_reasoning_models() {
-        // BUG-029: reasoning models burn thousands of tokens on internal
+        // BUG-035: reasoning models burn thousands of tokens on internal
         // <think> / reasoning_content before emitting YES/NO.  The default
         // must leave room for that.
         assert!(
@@ -809,7 +809,7 @@ mod tests {
     #[test]
     #[cfg(feature = "llm")]
     fn extract_openai_content_truncation_errors_clearly() {
-        // BUG-029: empty content + finish_reason=length → actionable error,
+        // BUG-035: empty content + finish_reason=length → actionable error,
         // not silent "Ambiguous LLM response:".
         let json = serde_json::json!({
             "choices": [{

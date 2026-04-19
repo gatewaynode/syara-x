@@ -24,8 +24,8 @@
 Refinement recorded in `tasks/TASK-REFINEMENT.md`.
 
 - [x] Added `OpenAiChatEvaluator` + `OpenAiChatEvaluatorBuilder` targeting `/v1/chat/completions` (LM Studio / vLLM / llama-server / openai.com / Ollama shim)
-- [x] Builder knobs: endpoint, model, api_key (bearer), temperature (default 0.0), max_tokens (default 8192 — reasoning-model headroom, BUG-029), system_prompt, extra headers, connect_timeout (20s default), read_timeout (60s default)
-- [x] BUG-029: reasoning-model truncation — detect `finish_reason=length` with empty `content` and surface an actionable `SyaraError::LlmError` (pointing at `.max_tokens(…)`) instead of silently falling through `parse_response` as "Ambiguous LLM response:". Pure extractor helper `extract_openai_content` with 5 unit tests. Confirmed live against `qwen/qwen3.6-35b-a3b` via LM Studio.
+- [x] Builder knobs: endpoint, model, api_key (bearer), temperature (default 0.0), max_tokens (default 8192 — reasoning-model headroom, BUG-035), system_prompt, extra headers, connect_timeout (20s default), read_timeout (60s default)
+- [x] BUG-035: reasoning-model truncation — detect `finish_reason=length` with empty `content` and surface an actionable `SyaraError::LlmError` (pointing at `.max_tokens(…)`) instead of silently falling through `parse_response` as "Ambiguous LLM response:". Pure extractor helper `extract_openai_content` with 5 unit tests. Confirmed live against `qwen/qwen3.6-35b-a3b` via LM Studio. (Originally filed as BUG-029 in session notes; renumbered to avoid collision with the WAV RIFF padding bug.)
 - [x] Response cache keyed on `(pattern, chunk)` when `temperature==0.0`; bounded at 1024 entries; cleared per-scan via `LLMEvaluator::clear_cache` + `Registry::clear_llm_caches`
 - [x] Env-var auto-detection for default registration: `SYARA_LLM_{ENDPOINT,MODEL,API_KEY}` (preferred) → `OPENAI_{BASE_URL,MODEL,API_KEY}` (fallback) → hardcoded `localhost:1234` fallback; opt-out via `SYARA_LLM_NO_ENV=1`
 - [x] Default registry entry renamed `ollama` → `openai-api-compatible`; `ollama` kept as legacy for users on Ollama's native `/api/chat`
@@ -67,29 +67,9 @@ Final state: 131 lib tests + 25 integration tests + 4 doc-tests, clippy clean wi
 
 ### Phase 5 Known Bugs (on hold)
 
-Real-model integration tests (`--ignored`) revealed issues that don't affect fixture tests:
-
-**Qwen3.5-0.8B — tensor shape crash:**
-```
-Mul: Incompatible size at dimension '2' => '2048 != 128'
-Lhs [1, 70, 2048], Rhs [1, 1, 128]
-```
-Root cause: `models/Qwen3.5-0.8B-Base/config.json` is actually **Qwen3_5ForConditionalGeneration** (multimodal VL model) with features our Burn code doesn't implement:
-- `attn_output_gate: true` — attention output gating (not in our `FullAttention`)
-- `mrope_interleaved: true` + `mrope_section: [11,11,10]` — multi-dimensional RoPE for vision, we use plain RoPE
-- `layer_types` explicit list (replaces `full_attention_interval` derivation)
-- `head_dim: 256`, `linear_key_head_dim: 128`, `linear_num_key_heads: 16` → DeltaNet v_dim=2048, much larger than tiny fixture dims — exposed a broadcast axis bug in DeltaNet recurrence
-- Architecture string `Qwen3_5ForConditionalGeneration` may not match our detector
-
-**Nemotron-3-Nano-4B — extreme slowness (not a crash):**
-Model loads and runs, but NdArray CPU backend on 4B params with no KV cache is impractical. Each token requires a full forward pass through 42 layers × 3136-dim. Expected to take hours per generation.
-
-**Options for future fix (pick when revisiting):**
-1. **Replace Burn inference with candle or mistral.rs** — both have Metal/MLX support, KV cache, and existing Qwen3/Nemotron implementations. Keep Burn fixture tests as architecture validation.
-2. **Find a non-VL Qwen3 model** that matches what we've built (no output gate, plain RoPE).
-3. **Implement missing features in Burn** — output-gated attention, mrope, KV cache. Weeks of work to reach where candle/mistral.rs already are.
-
-MLX-level Apple Silicon performance will require candle (Metal) or mistral.rs (MLX bindings) regardless — Burn's wgpu/Metal path uses generic shaders.
+Migrated to `tasks/BUGS.md` on 2026-04-19 as **BUG-036** (Qwen3.5 shape
+crash) and **BUG-037** (Nemotron CPU slowness). Both blocked on a candle
+or mistral.rs backend migration — see `ROADMAP.md`.
 
 ---
 
