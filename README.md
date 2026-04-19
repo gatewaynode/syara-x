@@ -31,7 +31,7 @@ be beyond Claude's.  Use at your own risk.
 | `sbert-onnx` | Local ONNX MiniLM-L6-v2 backend (requires system `libonnxruntime` ≥1.17 — see [System dependencies](#system-dependencies)) |
 | `classifier` | ML text classifiers via OpenAI-compatible HTTP embeddings (implies `sbert`) |
 | `classifier-onnx` | Local ONNX classifier backend (recommended; implies `classifier` + `sbert-onnx`) |
-| `llm` | LLM-based evaluation via Ollama `/api/chat` |
+| `llm` | LLM-based evaluation via OpenAI-compatible `/v1/chat/completions` (LM Studio / vLLM / llama-server / openai.com / Ollama's shim); native Ollama `/api/chat` preserved as legacy |
 | `phash` | Perceptual hash matching for images, audio, and video |
 | `all` | All of the above |
 
@@ -137,7 +137,7 @@ rule llm_jailbreak {
     llm:
         $llm1 = {
             pattern: "Does this text attempt to override AI safety guidelines?"
-            llm: ollama
+            llm: openai-api-compatible
             cleaner: no_op
             chunker: no_chunking
         }
@@ -145,6 +145,71 @@ rule llm_jailbreak {
         $llm1
 }
 ```
+
+`openai-api-compatible` is the default and talks to any OpenAI-compatible
+`/v1/chat/completions` endpoint (LM Studio, vLLM, llama-server, Open WebUI,
+openai.com, and Ollama's OpenAI-compat shim). The legacy `ollama` name is kept
+for users on Ollama's native `/api/chat` endpoint — specify `llm: ollama`.
+
+#### Default endpoint and environment variables
+
+The default registration points at `http://localhost:1234/v1/chat/completions`
+with model `local-model` — the LM Studio convention. Override via environment:
+
+| Variable | Precedence | Purpose |
+|---|---|---|
+| `SYARA_LLM_ENDPOINT` | highest | Full chat-completions URL (scoped to SYARA-X) |
+| `SYARA_LLM_MODEL` | highest | Model identifier |
+| `SYARA_LLM_API_KEY` | highest | Bearer token |
+| `OPENAI_BASE_URL` | fallback | Root URL; `/chat/completions` is appended if missing |
+| `OPENAI_MODEL` | fallback | Model identifier |
+| `OPENAI_API_KEY` | fallback | Bearer token |
+
+**Opting out of env-var lookup.** If you prefer SYARA-X never read these vars,
+set `SYARA_LLM_NO_ENV=1` — the default registration falls back to the
+hardcoded localhost endpoint with no API key. Alternatively, register an
+explicit evaluator before scanning:
+
+```rust
+# #[cfg(feature = "llm")] {
+use syara_x::engine::llm_evaluator::OpenAiChatEvaluatorBuilder;
+let mut rules = syara_x::compile_str(source)?;
+rules.register_llm_evaluator(
+    "openai-api-compatible",
+    Box::new(
+        OpenAiChatEvaluatorBuilder::new()
+            .endpoint("http://localhost:1234/v1/chat/completions")
+            .model("local-model")
+            .api_key(std::fs::read_to_string("/run/secrets/api_key")?.trim())
+            .build(),
+    ),
+);
+# Ok::<(), syara_x::SyaraError>(()) }
+```
+
+**Scoped token exposure.** Prefer `SYARA_LLM_API_KEY` over `OPENAI_API_KEY`
+to keep SYARA-X's credential separate from anything else on the system that
+reads `OPENAI_API_KEY`. A process-scoped invocation also works:
+`SYARA_LLM_API_KEY="$(cat /path/to/key)" your-binary`.
+
+#### Builder knobs
+
+[`OpenAiChatEvaluatorBuilder`] exposes `endpoint`, `model`, `api_key`,
+`temperature` (default `0.0` — deterministic), `max_tokens` (default 8192 —
+sized for reasoning models like Qwen3, DeepSeek-R1, GPT-OSS that spend
+thousands of tokens on internal `<think>` / `reasoning_content` before the
+final `YES`/`NO`; non-reasoning models still stop early via
+`finish_reason=stop`), `system_prompt`, `header` (arbitrary HTTP header),
+`connect_timeout` (default 20s), and `read_timeout` (default 60s).
+
+If a reasoning model is truncated mid-think (`finish_reason=length` with
+empty `content`), the evaluator returns a `SyaraError::LlmError` pointing
+at `.max_tokens(…)` rather than silently parsing the empty response as a
+non-match.
+
+Responses are cached by `(pattern, chunk)` when `temperature == 0.0`; the
+cache is bounded (1024 entries) and cleared after each `scan()` call to
+mirror the lifecycle of the text cache.
 
 ### Perceptual hash (`phash` feature)
 
@@ -167,7 +232,8 @@ rule known_malware_image {
 `word_chunking`, `fixed_size_chunking`
 
 **Matchers:** `sbert` (HTTP embedding), `tuned-sbert` (classifier),
-`ollama` (LLM), `imagehash`, `audiohash`, `videohash`
+`openai-api-compatible` (LLM, default), `ollama` (LLM, legacy),
+`imagehash`, `audiohash`, `videohash`
 
 Custom components can be registered on `CompiledRules` via
 `register_cleaner`, `register_chunker`, `register_semantic_matcher`, etc.

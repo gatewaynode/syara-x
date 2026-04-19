@@ -293,7 +293,7 @@ pub(crate) fn parse_llm_section(body: &str) -> Result<Vec<LLMRule>, SyaraError> 
             llm_name: params
                 .get("llm")
                 .cloned()
-                .unwrap_or_else(|| "flan-t5-large".into()),
+                .unwrap_or_else(|| "openai-api-compatible".into()),
             cleaner_name: params
                 .get("cleaner")
                 .cloned()

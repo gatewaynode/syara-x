@@ -48,6 +48,8 @@ impl CompiledRules {
         }
 
         cache.clear();
+        #[cfg(any(feature = "llm", feature = "burn-llm"))]
+        self.registry.clear_llm_caches();
         results
     }
 
@@ -74,6 +76,8 @@ impl CompiledRules {
         }
 
         cache.clear();
+        #[cfg(any(feature = "llm", feature = "burn-llm"))]
+        self.registry.clear_llm_caches();
         results
     }
 

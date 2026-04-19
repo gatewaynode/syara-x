@@ -117,7 +117,7 @@ impl Default for LLMRule {
         Self {
             identifier: String::new(),
             pattern: String::new(),
-            llm_name: "ollama".into(),
+            llm_name: "openai-api-compatible".into(),
             cleaner_name: "no_op".into(),
             chunker_name: "no_chunking".into(),
         }

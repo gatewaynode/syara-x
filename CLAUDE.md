@@ -34,6 +34,7 @@ These load actual model weights / hit real services and take minutes to run, so 
 cargo test -p syara-x --features burn-llm        -- --ignored --nocapture integration_real_model               # Qwen3.5-0.8B
 cargo test -p syara-x --features burn-llm        -- --ignored --nocapture integration_real_nemotron            # Nemotron-3-Nano-4B
 cargo test -p syara-x --features sbert           -- --ignored --nocapture integration_real_openai_embed        # OpenAI-compatible /v1/embeddings (LM Studio / vLLM / openai.com)
+cargo test -p syara-x --features llm             -- --ignored --nocapture integration_real_openai_chat         # OpenAI-compatible /v1/chat/completions (LM Studio preferred; env: SYARA_LLM_{ENDPOINT,MODEL,API_KEY} or OPENAI_*)
 cargo test -p syara-x --features sbert           -- --ignored --nocapture integration_real_ollama_embed        # Ollama /api/embed
 cargo test -p syara-x --features sbert-onnx      -- --ignored --nocapture integration_real_onnx_embed          # Local MiniLM-L6-v2 ONNX (semantic matcher)
 cargo test -p syara-x --features classifier      -- --ignored --nocapture integration_real_openai_classifier   # OpenAI-compatible /v1/embeddings, classifier path
@@ -102,6 +103,21 @@ Authoritative phase numbering lives in `tasks/todo.md` — this is just a quick 
 - `burn-llm` / `burn-llm-gpu` ✅ — local LLM inference (Qwen3 + Nemotron, CPU + GPU backends)
 - `phash` — perceptual image hashing (`image` crate + dHash)
 - `capi` — C FFI via `cbindgen`
+
+## Local CLI Optimizations
+
+- `lst` is aliased to `lsd --tree --depth 2` for showing a shallow tree project and file layouts
+- `lsf` is aliased to `find . -type f -print0 | xargs -0 wc -l | sort -n` to show file word counts in a directory
+- `tokei` is available for broad quick project composition inspection
+- `fzf` and `ripgrep` are available, but often `tilth` is better
+
+## Cognitive Preferences
+
+### Objectivity
+
+- Prioritize objective facts and critical analysis over validation or encouragement 
+- You are not a friend, but a neutral information-processing machine
+- Conduct research and ask questions when relevant, do not jump straight to giving an answer
 
 ## Workflow Orchestration
 

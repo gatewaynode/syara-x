@@ -10,7 +10,7 @@
 | 1 | _(none)_ | Core: parser, condition AST, string matching, cleaners, chunkers, registry, cache, public API | ✅ Complete |
 | 2 | `sbert` / `sbert-onnx` | Semantic similarity (ONNX + HTTP embedding endpoint) | ✅ Complete |
 | 3 | `classifier` / `classifier-onnx` | ML text classifiers (HTTP + local ONNX) | ✅ Complete |
-| 4 | `llm` | HTTP LLM evaluators (OpenAI / Ollama) | ✅ Complete |
+| 4 | `llm` | HTTP LLM evaluators (OpenAI-compatible + Ollama legacy) | ✅ Complete |
 | 5 | `burn-llm` / `burn-llm-gpu` | Local LLM inference (Qwen3 + Nemotron, CPU + GPU) | ⚠️ Fixture tests pass; real-model bugs (see below) |
 | 6 | `phash` | Perceptual image hashing (`image` crate + dHash) | ✅ Complete |
 | 7 | `capi` | C FFI via `cbindgen` | ✅ Complete |
@@ -18,6 +18,23 @@
 ---
 
 ## Completed Features
+
+### HTTP LLM Configurability + OpenAI-Compatible Default ✅ (2026-04-19)
+
+Refinement recorded in `tasks/TASK-REFINEMENT.md`.
+
+- [x] Added `OpenAiChatEvaluator` + `OpenAiChatEvaluatorBuilder` targeting `/v1/chat/completions` (LM Studio / vLLM / llama-server / openai.com / Ollama shim)
+- [x] Builder knobs: endpoint, model, api_key (bearer), temperature (default 0.0), max_tokens (default 8192 — reasoning-model headroom, BUG-029), system_prompt, extra headers, connect_timeout (20s default), read_timeout (60s default)
+- [x] BUG-029: reasoning-model truncation — detect `finish_reason=length` with empty `content` and surface an actionable `SyaraError::LlmError` (pointing at `.max_tokens(…)`) instead of silently falling through `parse_response` as "Ambiguous LLM response:". Pure extractor helper `extract_openai_content` with 5 unit tests. Confirmed live against `qwen/qwen3.6-35b-a3b` via LM Studio.
+- [x] Response cache keyed on `(pattern, chunk)` when `temperature==0.0`; bounded at 1024 entries; cleared per-scan via `LLMEvaluator::clear_cache` + `Registry::clear_llm_caches`
+- [x] Env-var auto-detection for default registration: `SYARA_LLM_{ENDPOINT,MODEL,API_KEY}` (preferred) → `OPENAI_{BASE_URL,MODEL,API_KEY}` (fallback) → hardcoded `localhost:1234` fallback; opt-out via `SYARA_LLM_NO_ENV=1`
+- [x] Default registry entry renamed `ollama` → `openai-api-compatible`; `ollama` kept as legacy for users on Ollama's native `/api/chat`
+- [x] `LLMRule::default` and parser default both updated to `openai-api-compatible`
+- [x] 5 new unit tests: empty-input short-circuit, doubled timeouts, builder validation, builder knob composition, clear_cache safety
+- [x] `#[ignore]` `integration_real_openai_chat` test hitting LM Studio (reads env vars)
+- [x] README updates: feature-flag row, LLM example, env-var table + opt-out docs + scoped-token guidance, built-in component list
+- [x] CLAUDE.md real-model-tests block updated with `integration_real_openai_chat`
+- [x] `cargo test --features llm` all green; `cargo clippy --all-features -- -D warnings` clean
 
 ### Publish to crates.io ✅
 

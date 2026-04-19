@@ -1,11 +1,19 @@
 //! Local LLM inference via the Burn deep learning framework.
 //!
-//! [`BurnEvaluator`] implements [`LLMEvaluator`] using Burn for local model
-//! inference, eliminating the need for an external HTTP server.
+//! **⚠ ROADMAP — not production-ready.**
 //!
-//! Supports multiple model architectures (Qwen3.5, Nemotron) via
-//! auto-detection from `config.json`. Use [`BurnEvaluatorBuilder`] for
-//! GPU inference or custom generation settings.
+//! This backend is blocked on known issues and is scheduled for migration to
+//! [candle](https://github.com/huggingface/candle). See `ROADMAP.md`.
+//!
+//! Known blockers:
+//! - Qwen3.5-0.8B: tensor shape crash — the HuggingFace checkpoint is a
+//!   multimodal VL model with gated attention and mrope not implemented here.
+//! - Nemotron-3-Nano-4B: loads but is impractically slow on CPU NdArray
+//!   backend (no KV cache, full forward pass per token).
+//!
+//! Calling [`BurnEvaluator::from_dir`] or [`BurnEvaluatorBuilder::build`]
+//! always returns an error describing the situation and pointing to `ROADMAP.md`.
+//! Use the HTTP LLM evaluator (`llm` feature) as a drop-in alternative.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -210,7 +218,19 @@ impl BurnEvaluatorBuilder {
     }
 
     /// Build the evaluator, loading the model and tokenizer.
+    ///
+    /// **Always returns an error.** This backend is on the roadmap for
+    /// migration to candle-rs and is not yet production-ready. See
+    /// `ROADMAP.md`. Use the `llm` feature (HTTP evaluator) instead.
+    #[allow(unreachable_code)]
     pub fn build(self) -> Result<BurnEvaluator, SyaraError> {
+        return Err(SyaraError::LlmError(
+            "The burn-llm / burn-llm-gpu backend is not production-ready \
+             and is scheduled for migration to candle-rs. \
+             Use the `llm` feature (HTTP LLM evaluator) instead. \
+             See ROADMAP.md for details."
+                .into(),
+        ));
         let model_dir = self.model_dir.as_deref().ok_or_else(|| {
             SyaraError::LlmError("model_dir is required".into())
         })?;
@@ -289,26 +309,15 @@ mod tests {
     }
 
     #[test]
-    fn builder_missing_dir_errors() {
+    fn builder_returns_roadmap_error() {
+        // build() always returns the roadmap error regardless of arguments.
         let result = BurnEvaluatorBuilder::new().build();
         match result {
-            Err(e) => assert!(e.to_string().contains("model_dir"), "error should mention model_dir: {e}"),
-            Ok(_) => panic!("expected error for missing model_dir"),
-        }
-    }
-
-    #[test]
-    fn builder_gpu_without_feature_errors() {
-        #[cfg(not(feature = "burn-llm-gpu"))]
-        {
-            let result = BurnEvaluatorBuilder::new()
-                .model_dir("/nonexistent")
-                .gpu(true)
-                .build();
-            match result {
-                Err(e) => assert!(e.to_string().contains("burn-llm-gpu"), "error should mention feature: {e}"),
-                Ok(_) => panic!("expected error when GPU feature not enabled"),
-            }
+            Err(e) => assert!(
+                e.to_string().contains("ROADMAP"),
+                "error should mention ROADMAP: {e}"
+            ),
+            Ok(_) => panic!("expected roadmap error"),
         }
     }
 
@@ -333,6 +342,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // walled off — burn-llm is on the roadmap for candle migration (see ROADMAP.md)
     fn fixture_load_and_evaluate() {
         let fixture_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/tiny-qwen");
@@ -348,6 +358,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // walled off — burn-llm is on the roadmap for candle migration (see ROADMAP.md)
     fn builder_cpu_default() {
         let fixture_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/tiny-qwen");
@@ -364,6 +375,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // walled off — burn-llm is on the roadmap for candle migration (see ROADMAP.md)
     fn fixture_load_and_evaluate_nemotron() {
         let fixture_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/tiny-nemotron");
