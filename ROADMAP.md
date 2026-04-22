@@ -36,3 +36,20 @@ Replace `burn_evaluator.rs` and the `engine/burn_model/` subtree with a candle-b
 - candle Qwen example: `candle-examples/examples/qwen/`
 - Phase 5 bug notes: `tasks/todo.md` → "Phase 5 Known Bugs"
 - Existing Burn model code: `syara/src/engine/burn_model/` (kept for reference)
+
+## YARA-X parity gaps (condition DSL)
+
+**Status:** Deferred  
+**Shipped:** 2026-04-22 — `#pattern` count operators, comparisons (`== != < <= > >=`), `+`/`-` arithmetic.
+
+Items below are known YARA-X parity gaps not yet implemented. None are blocking real rule authorship today; add as rule corpus demand appears.
+
+- **Arithmetic `*` / `/` / `%`.** The `*` token currently serves as the set-wildcard sigil inside `any of ($prefix*)`. Adding multiplication needs parse-context disambiguation (the wildcard is always inside a `(`-delimited set, the operator always between two integer expressions, but the grammar currently does not carry that context). Workaround: rewrite `#a * 2 >= b` as `(#a + #a) >= b` or split into two comparisons.
+- **`@pattern[i]` (offset of the i-th occurrence).** Returns the byte offset at which the i-th match of `pattern` starts. 1-indexed. Needs a new subscript grammar and wider `MatchDetail.start_pos` plumbing (already `Option<usize>`).
+- **`!pattern[i]` (length of the i-th occurrence).** Companion to `@`. Needs `MatchDetail.end_pos - start_pos`.
+- **Integer size suffixes (`KB`, `MB`, etc.).** YARA lets you write `100KB` as `102400`. Lexer-level; trivial when a rule actually wants it.
+- **`not not x`.** Current grammar rejects chained `not`. YARA-X allows it; parens (`not (not x)`) work as a workaround.
+
+## `#`-operator count ceiling for non-string rules
+
+`#identifier` on a `similarity` / `classifier` / `llm` / `phash` rule has a ceiling of 1 — those matchers produce `vec![detail]` or `vec![]` per rule invocation, not one entry per "occurrence". `#llm1 >= 1` is still meaningful ("did the LLM fire"), but `#classifier1 >= 3` can never be true. If a matcher changes its emission cardinality (e.g. chunk-level classifier results expanded into one detail per positive chunk), revisit the documentation.

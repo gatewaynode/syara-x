@@ -387,4 +387,19 @@ mod tests {
         // Should get at least the ASCII match
         assert!(hits.len() >= 1);
     }
+
+    /// Inline `(?m)` parity: in multiline mode `^` anchors after newlines,
+    /// not just at the start of input. Confirms the regex crate's flag
+    /// syntax is honoured end-to-end through StringMatcher.
+    #[test]
+    fn test_multiline_inline_flag() {
+        let mut matcher = StringMatcher::new();
+        let rule = regex_rule("$s", "(?m)^foo", vec![]);
+
+        let hits = matcher.match_rule(&rule, "bar\nfoo").unwrap();
+        assert_eq!(hits.len(), 1, "(?m)^foo must match after a newline");
+
+        let hits = matcher.match_rule(&rule, "barfoo").unwrap();
+        assert!(hits.is_empty(), "^ must not match inside a line");
+    }
 }

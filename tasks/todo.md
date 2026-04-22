@@ -73,7 +73,32 @@ or mistral.rs backend migration — see `ROADMAP.md`.
 
 ---
 
-## Planned Features
+### Condition DSL: `#pattern` count operators + `(?m)` parity ✅ (2026-04-22)
+
+Requested by `llm_context_shield` Phase 9b on the same day. Target YARA-X parity for integer-valued condition expressions; closeout of the `(?m)` inline-flag known-unknown.
+
+Shipped acceptance items:
+
+- [x] Parser accepts `#<ident>`; unknown names produce the existing "undefined identifier" error (compiler text-scan regex extended `\$\w+` → `[#$]\w+`; sigil-normalized `#name → $name` before declared-set lookup)
+- [x] Evaluator returns the per-pattern match count via `Vec<MatchDetail>::len()`; no new matcher work (`string_matcher.rs:82-87` already emits one detail per `find_iter` hit)
+- [x] `cargo test` covers: lone `#s1 == N`, `#s1 >= N and #s2 >= M`, arithmetic `#a + #b`, undefined `#s_missing` rejected at compile time
+- [x] Previous `test_unknown_char_hash_is_error` inverted to `test_hash_is_count_primary` — now asserts `#s1 == 0` parses as `Cmp(Count("$s1"), Eq, IntLit(0))`
+- [x] `(?m)` inline-flag parity test — `test_multiline_inline_flag` in `string_matcher.rs` asserts `(?m)^foo` matches `"bar\nfoo"` but not `"barfoo"`
+
+Implementation summary (see plan: `~/.claude/plans/eager-splashing-wave.md`):
+
+- **Grammar** extended: `or < and < not < cmp < add < unary < primary`. Non-associative comparison (chained `a < b < c` rejected).
+- **AST**: `Expr` gained `Count(String)`, `IntLit(i64)`, `Cmp(l, CmpOp, r)`, `BinOp(l, ArithOp, r)`, `Neg(inner)`. New `CmpOp { Eq, Ne, Lt, Le, Gt, Ge }` and `ArithOp { Add, Sub }`. Private `Value { Bool, Int }` powers the runtime evaluator.
+- **Tokenizer**: new `Count(String)` (stores `$`-normalized), `Int(i64)`, `Cmp(CmpOp)`, `Plus`, `Minus`. Two-char lookahead for `==` / `!=` / `<=` / `>=`. Bare `#` / bare `!` / bare `=` stay `Unknown`. `@`/`!` still rejected (test `test_unknown_char_at_sign_is_error` preserved).
+- **Post-parse type-check** runs in `condition::parse` and surfaces type errors as `SyaraError::ConditionParse("type error: ...")` at compile time, not scan time.
+- **`is_identifier_needed`** gained count-aware pessimism: if the LLM identifier appears inside any `Count` subtree, skip the optimization (`mentions_count_of` walker); otherwise existing Identifier-substitution logic remains sound with integer expressions evaluated against the current pattern map.
+- **Compiler** identifier-text scan now recognizes both sigils; `declared: HashSet<String>` (was `<&str>`) to enable owned-key normalization lookups.
+
+Arithmetic deferred (see `ROADMAP.md`): `*` / `/` / `%` (the `*` token collides with the set-wildcard syntax), `@pattern[i]` (offset-of-i-th), `!pattern[i]` (length-of-i-th), integer size suffixes (`KB`, `MB`), `not not x`.
+
+Known limitation: `#` on similarity, classifier, LLM, and phash rules has a ceiling of 1 (those matchers produce `vec![detail]` or `vec![]` per rule invocation). `#llm1 >= 1` is still meaningful ("did the LLM fire"); documented.
+
+Test counts: 196 lib + 28 integration + 5 doc-tests green (default + `--all-features`). Lib-only clippy clean on `--all-features`. Pre-existing clippy-in-tests warnings unchanged (13 in llm_evaluator/burn_model/models tests, predate this work).
 
 <!-- Phase 2 shipped 2026-04-17 — kept below for provenance, but it is complete. -->
 

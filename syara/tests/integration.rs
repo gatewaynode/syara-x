@@ -452,3 +452,59 @@ fn test_parse_sample_rules_file() {
     }
     // If the file doesn't exist in the test environment, skip gracefully.
 }
+
+// ── #pattern count operators end-to-end ─────────────────────────────────
+
+const COUNT_RULES: &str = r#"
+rule multi_turn_transcript {
+    strings:
+        $user = "user:"
+        $assistant = "assistant:"
+    condition:
+        #user >= 2 and #assistant >= 1
+}
+"#;
+
+#[test]
+fn test_count_operator_matches_multi_turn() {
+    let rules = syara_x::compile_str(COUNT_RULES).unwrap();
+    let text = "\
+        user: hello there\n\
+        assistant: hi, what can I help with?\n\
+        user: tell me a joke\n\
+        assistant: sure, here goes...\n\
+        user: another please\n\
+    ";
+    let results = rules.scan(text);
+    let m = results
+        .iter()
+        .find(|m| m.rule_name == "multi_turn_transcript")
+        .expect("rule missing from results");
+    assert!(m.matched, "three user: and two assistant: — should match");
+}
+
+#[test]
+fn test_count_operator_rejects_single_turn() {
+    let rules = syara_x::compile_str(COUNT_RULES).unwrap();
+    let text = "user: hello\nassistant: hi\n";
+    let results = rules.scan(text);
+    let m = results
+        .iter()
+        .find(|m| m.rule_name == "multi_turn_transcript")
+        .unwrap();
+    assert!(!m.matched, "only one user: present — should not match");
+}
+
+#[test]
+fn test_count_operator_undefined_identifier_errors() {
+    let src = r#"
+    rule bad_count {
+        strings:
+            $s1 = "hello"
+        condition:
+            #s_missing >= 1
+    }
+    "#;
+    let result = syara_x::compile_str(src);
+    assert!(result.is_err(), "#s_missing must be rejected at compile time");
+}
