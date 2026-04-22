@@ -16,9 +16,9 @@ Nabeel Yoosuf
 
 **EXPERIMENTAL**: Do not use this for anything important yet.  I'm lazily commmiting
 directly to `main` some very speculative features that I'm not sure if Claude can
-pull off.  The 0.2 release will embed local LLM processing using [Burn](https://github.com/tracel-ai/burn) that locally
-provides a couple of LLMs for rules, this is beyond my current capability and might
-be beyond Claude's.  Use at your own risk.
+pull off.  The local-LLM backend (`burn-llm` / `burn-llm-gpu`) is currently walled
+off pending a migration to `candle-rs` — see [ROADMAP.md](ROADMAP.md).  Use at your
+own risk.
 
 ---
 
@@ -42,7 +42,7 @@ be beyond Claude's.  Use at your own risk.
 ```toml
 # Cargo.toml
 [dependencies]
-syara-x = { version = "0.1", features = ["all"] }
+syara-x = { version = "0.3", features = ["all"] }
 ```
 
 ```rust
@@ -85,6 +85,31 @@ rule example {
 ```
 
 Supported modifiers: `nocase`, `wide`, `ascii`, `dotall`, `fullword`.
+
+Regex patterns support Rust's inline flag syntax — `(?m)^foo` (multiline),
+`(?s).*` (dot-matches-newline), `(?i)foo` (case-insensitive). Inline flags
+compose with modifiers.
+
+### Condition expressions
+
+Conditions are boolean expressions over pattern identifiers (`$name`) and
+pattern match counts (`#name`). YARA-style:
+
+```
+rule multi_turn_transcript {
+    strings:
+        $user      = "user:"
+        $assistant = "assistant:"
+    condition:
+        #user >= 2 and #assistant >= 1
+}
+```
+
+Supported: `$id`, `#id` (count), integer literals, `== != < <= > >=`,
+`+` / `-` arithmetic, unary `-`, `and` / `or` / `not`, `any of` / `all of`
+pattern sets (`(them | $a,$b | $prefix*)`). See
+[tasks/YARA-X-PARITY-GAPS.md](tasks/YARA-X-PARITY-GAPS.md) for what's not
+yet supported vs YARA-X.
 
 ### Semantic similarity (`sbert` feature)
 
