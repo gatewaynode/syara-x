@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Until `1.0.0`, minor-version bumps may include breaking changes to the DSL or
 public API.
 
+## [0.3.1] — 2026-04-24
+
+### Fixed
+
+- **BUG-038 — `OpenAiChatEvaluator` reasoning-mode escape hatch.** The
+  request body in `OpenAiChatEvaluator::evaluate` was a fixed `json!`
+  literal with no way to send `reasoning_effort` or any
+  server-specific knob. Reasoning-on LMStudio loadouts (the dominant
+  2026 local default) consumed the entire `max_tokens` budget inside
+  `reasoning_content` and emitted empty `choices[0].message.content`,
+  causing all `llm:` rules to silently fail. See
+  `tasks/04-24-2026_BUGS.md` for the full close-out.
+
+### Added
+
+- **`OpenAiChatEvaluatorBuilder::reasoning_effort(impl Into<String>)`**
+  to set the OpenAI-compatible
+  `reasoning_effort: "none" | "low" | "medium" | "high"` body field.
+- **`OpenAiChatEvaluatorBuilder::disable_reasoning_effort()`** to omit
+  the field entirely (escape hatch for strict servers that 400 on
+  unknown body keys).
+- **`OpenAiChatEvaluatorBuilder::extra_body(key, serde_json::Value)`**
+  forward-compatible escape hatch for server-specific knobs (`top_p`,
+  `seed`, `response_format`, etc.). Inserted last, so it overrides
+  explicit fields.
+- **`OpenAiChatEvaluator::DEFAULT_REASONING_EFFORT`** constant
+  (`"none"`).
+- **`SYARA_LLM_REASONING_EFFORT` env var** read by
+  `resolve_openai_env_defaults`. Empty string = disable; any other
+  value = pass through to the builder. Honours `SYARA_LLM_NO_ENV=1`.
+
+### Changed
+
+- **Default request body now includes `reasoning_effort: "none"`.**
+  Reasoning-mode servers stop thinking and emit a final answer without
+  configuration; permissive servers ignore the unknown field. Strict
+  servers can opt out via `disable_reasoning_effort()` or
+  `SYARA_LLM_REASONING_EFFORT=""`.
+- Body construction extracted from the inline `json!` literal in
+  `evaluate` to a `pub(crate) fn build_request_body` for
+  unit-testability.
+
 ## [0.3.0] — 2026-04-22
 
 ### Added
@@ -63,5 +105,6 @@ and native Ollama paths), perceptual-hash matcher (`phash`), and C FFI
 (`capi`). Local-LLM backend (`burn-llm` / `burn-llm-gpu`) walled off pending
 candle-rs migration (see `ROADMAP.md`).
 
+[0.3.1]: https://github.com/gatewaynode/syara-x/releases/tag/v0.3.1
 [0.3.0]: https://github.com/gatewaynode/syara-x/releases/tag/v0.3.0
 [0.2.0]: https://github.com/gatewaynode/syara-x/releases/tag/v0.2.0

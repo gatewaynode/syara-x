@@ -1,10 +1,10 @@
 # Open Bugs
 
 Outstanding, un-fixed bugs in `syara-x`. Closed bugs live in dated archives
-(most recent: `tasks/04-19-2026_BUGS.md`).
+(most recent: `tasks/04-24-2026_BUGS.md`).
 
 Every fix must include a regression test. Dense, historical numbering —
-do not reuse. Next number: **BUG-036** (already claimed below).
+do not reuse. Next number: **BUG-039**.
 
 ---
 

@@ -109,12 +109,25 @@ impl Registry {
             // Honours `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`
             // (and `SYARA_LLM_*` equivalents) unless `SYARA_LLM_NO_ENV=1`.
             // See README for how to scope token exposure.
-            let (endpoint, model, api_key) = resolve_openai_env_defaults();
+            let (endpoint, model, api_key, reasoning_effort) =
+                resolve_openai_env_defaults();
             let mut builder = OpenAiChatEvaluatorBuilder::new()
                 .endpoint(endpoint)
                 .model(model);
             if let Some(key) = api_key {
                 builder = builder.api_key(key);
+            }
+            // None → keep builder default ("none")
+            // Some("") → explicit disable for strict servers
+            // Some(v) → explicit value (low/medium/high/none)
+            match reasoning_effort.as_deref() {
+                None => {}
+                Some("") => {
+                    builder = builder.disable_reasoning_effort();
+                }
+                Some(v) => {
+                    builder = builder.reasoning_effort(v.to_string());
+                }
             }
             self.llm_evaluators
                 .insert("openai-api-compatible".into(), Box::new(builder.build()));
@@ -277,27 +290,37 @@ impl Default for Registry {
     }
 }
 
-/// Resolve `(endpoint, model, api_key)` for the default OpenAI-compatible
-/// LLM evaluator.
+/// Resolve `(endpoint, model, api_key, reasoning_effort)` for the default
+/// OpenAI-compatible LLM evaluator.
 ///
 /// Lookup order (first hit wins):
-/// 1. `SYARA_LLM_ENDPOINT` / `SYARA_LLM_MODEL` / `SYARA_LLM_API_KEY`
-///    — scoped specifically to SYARA-X so users can set them without
-///    leaking into other tools that read `OPENAI_*`.
+/// 1. `SYARA_LLM_ENDPOINT` / `SYARA_LLM_MODEL` / `SYARA_LLM_API_KEY` /
+///    `SYARA_LLM_REASONING_EFFORT` — scoped specifically to SYARA-X so
+///    users can set them without leaking into other tools that read
+///    `OPENAI_*`.
 /// 2. `OPENAI_BASE_URL` (root URL; `/chat/completions` appended if missing) /
 ///    `OPENAI_MODEL` / `OPENAI_API_KEY` — standard OpenAI SDK conventions.
 /// 3. Hardcoded local fallback: `http://localhost:1234/v1/chat/completions`
 ///    with model `local-model` and no API key.
 ///
+/// `reasoning_effort` semantics:
+/// * `None` returned → caller should leave the builder default
+///   ([`OpenAiChatEvaluator::DEFAULT_REASONING_EFFORT`]).
+/// * `Some("")` returned → caller should call
+///   [`OpenAiChatEvaluatorBuilder::disable_reasoning_effort`] (explicit
+///   opt-out for strict servers).
+/// * `Some(value)` returned → caller should call
+///   [`OpenAiChatEvaluatorBuilder::reasoning_effort`].
+///
 /// All env reads are skipped entirely if `SYARA_LLM_NO_ENV` is set to `1`
 /// or `true`.  See README for guidance on scoping token exposure.
 #[cfg(feature = "llm")]
-fn resolve_openai_env_defaults() -> (String, String, Option<String>) {
+fn resolve_openai_env_defaults() -> (String, String, Option<String>, Option<String>) {
     const FALLBACK_ENDPOINT: &str = "http://localhost:1234/v1/chat/completions";
     const FALLBACK_MODEL: &str = "local-model";
 
     if env_flag("SYARA_LLM_NO_ENV") {
-        return (FALLBACK_ENDPOINT.into(), FALLBACK_MODEL.into(), None);
+        return (FALLBACK_ENDPOINT.into(), FALLBACK_MODEL.into(), None, None);
     }
 
     let endpoint = std::env::var("SYARA_LLM_ENDPOINT")
@@ -322,7 +345,9 @@ fn resolve_openai_env_defaults() -> (String, String, Option<String>) {
         .ok()
         .or_else(|| std::env::var("OPENAI_API_KEY").ok());
 
-    (endpoint, model, api_key)
+    let reasoning_effort = std::env::var("SYARA_LLM_REASONING_EFFORT").ok();
+
+    (endpoint, model, api_key, reasoning_effort)
 }
 
 #[cfg(feature = "llm")]

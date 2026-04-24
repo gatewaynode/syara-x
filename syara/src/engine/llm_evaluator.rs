@@ -276,7 +276,26 @@ impl LLMEvaluator for OllamaEvaluator {
 /// openai.com, and Ollama's OpenAI compatibility shim.
 ///
 /// Configure via [`OpenAiChatEvaluatorBuilder`] for API keys, temperature,
-/// timeouts, custom headers, etc.
+/// timeouts, custom headers, `reasoning_effort`, and arbitrary
+/// `extra_body` knobs.
+///
+/// ## Reasoning-mode models (BUG-038)
+///
+/// Modern open-weight models (Qwen3, DeepSeek-R1, Gemma-3 with thinking,
+/// GPT-OSS, MiniMax-M*) ship with reasoning enabled by default and can
+/// exhaust the entire `max_tokens` budget inside `reasoning_content`,
+/// emitting empty `choices[0].message.content` with
+/// `finish_reason: "length"`.  The OpenAI-compatible chat-completions API
+/// accepts `reasoning_effort: "none" | "low" | "medium" | "high"` to bound
+/// or disable thinking; this evaluator sends
+/// [`DEFAULT_REASONING_EFFORT`] (`"none"`) by default so reasoning
+/// loadouts produce a final answer out of the box.  Override with
+/// [`OpenAiChatEvaluatorBuilder::reasoning_effort`] (or omit the field
+/// entirely with [`disable_reasoning_effort`]) for servers that strict-400
+/// on unknown body keys.
+///
+/// [`DEFAULT_REASONING_EFFORT`]: OpenAiChatEvaluator::DEFAULT_REASONING_EFFORT
+/// [`disable_reasoning_effort`]: OpenAiChatEvaluatorBuilder::disable_reasoning_effort
 ///
 /// ## Response cache
 ///
@@ -300,6 +319,8 @@ pub struct OpenAiChatEvaluator {
     max_tokens: u32,
     system_prompt: String,
     extra_headers: Vec<(String, String)>,
+    reasoning_effort: Option<String>,
+    extra_body: Vec<(String, serde_json::Value)>,
     client: reqwest::blocking::Client,
     cache: std::sync::Mutex<
         std::collections::HashMap<(String, String), (bool, String)>,
@@ -317,15 +338,23 @@ impl OpenAiChatEvaluator {
     pub const DEFAULT_TEMPERATURE: f32 = 0.0;
     /// Default max generated tokens.
     ///
-    /// Sized to accommodate reasoning models (Qwen3, DeepSeek-R1, GPT-OSS,
-    /// Gemma-3 with thinking) that may spend several thousand tokens on
-    /// internal `<think>…</think>` / `reasoning_content` before producing
-    /// `YES: …` / `NO: …`.  For non-reasoning models this is harmless —
-    /// generation stops early via `finish_reason=stop`.  For modern local
-    /// context windows (often 100k+ tokens), 8192 is conservative.  Override
-    /// with [`OpenAiChatEvaluatorBuilder::max_tokens`] for latency- or
+    /// With the default [`DEFAULT_REASONING_EFFORT`] of `"none"`, the
+    /// budget is rarely exhausted — most servers stop early via
+    /// `finish_reason=stop`.  Kept at 8192 to leave headroom for callers
+    /// who raise `reasoning_effort` to `"low"`/`"medium"`/`"high"` and
+    /// still want a complete final answer.  Lower it for latency- or
     /// cost-sensitive deployments.
+    ///
+    /// [`DEFAULT_REASONING_EFFORT`]: OpenAiChatEvaluator::DEFAULT_REASONING_EFFORT
     pub const DEFAULT_MAX_TOKENS: u32 = 8192;
+    /// Default `reasoning_effort` body field.
+    ///
+    /// `"none"` disables internal chain-of-thought on reasoning-mode
+    /// servers (LMStudio, vLLM, OpenAI o-series / gpt-5, llama-server).
+    /// Non-reasoning servers ignore the field.  See BUG-038 for the
+    /// rationale; override with
+    /// [`OpenAiChatEvaluatorBuilder::reasoning_effort`].
+    pub const DEFAULT_REASONING_EFFORT: &'static str = "none";
     /// Maximum cached `(pattern, chunk) -> (is_match, explanation)` entries.
     const CACHE_CAPACITY: usize = 1024;
     /// Default system prompt — used to frame the task for the model.
@@ -339,6 +368,39 @@ impl OpenAiChatEvaluator {
             .endpoint(endpoint)
             .model(model)
             .build()
+    }
+
+    /// Build the chat-completions request body.
+    ///
+    /// Insertion order: explicit fields → `reasoning_effort` (if set) →
+    /// `extra_body` entries.  Because `serde_json::Map::insert` overwrites
+    /// existing keys, callers can override any explicit field via
+    /// `extra_body` — including `reasoning_effort` itself if a server
+    /// expects a non-string value.
+    pub(crate) fn build_request_body(&self, prompt: &str) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                { "role": "system", "content": self.system_prompt },
+                { "role": "user", "content": prompt }
+            ],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "stream": false
+        });
+        let obj = body
+            .as_object_mut()
+            .expect("json! literal is always an object");
+        if let Some(effort) = &self.reasoning_effort {
+            obj.insert(
+                "reasoning_effort".into(),
+                serde_json::Value::String(effort.clone()),
+            );
+        }
+        for (k, v) in &self.extra_body {
+            obj.insert(k.clone(), v.clone());
+        }
+        body
     }
 }
 
@@ -359,16 +421,7 @@ impl LLMEvaluator for OpenAiChatEvaluator {
         }
 
         let prompt = build_prompt(pattern, input_text);
-        let body = serde_json::json!({
-            "model": self.model,
-            "messages": [
-                { "role": "system", "content": self.system_prompt },
-                { "role": "user", "content": prompt }
-            ],
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "stream": false
-        });
+        let body = self.build_request_body(&prompt);
 
         let mut req = self.client.post(&self.endpoint).json(&body);
         if let Some(key) = &self.api_key {
@@ -423,6 +476,7 @@ impl LLMEvaluator for OpenAiChatEvaluator {
 ///     .model("local-model")
 ///     .temperature(0.0)
 ///     .max_tokens(8192)
+///     .reasoning_effort("none") // suppress reasoning-mode chain-of-thought
 ///     .build();
 /// # }
 /// ```
@@ -435,6 +489,8 @@ pub struct OpenAiChatEvaluatorBuilder {
     max_tokens: u32,
     system_prompt: String,
     extra_headers: Vec<(String, String)>,
+    reasoning_effort: Option<String>,
+    extra_body: Vec<(String, serde_json::Value)>,
     connect_timeout: std::time::Duration,
     read_timeout: std::time::Duration,
 }
@@ -450,6 +506,10 @@ impl OpenAiChatEvaluatorBuilder {
             max_tokens: OpenAiChatEvaluator::DEFAULT_MAX_TOKENS,
             system_prompt: OpenAiChatEvaluator::DEFAULT_SYSTEM_PROMPT.into(),
             extra_headers: Vec::new(),
+            reasoning_effort: Some(
+                OpenAiChatEvaluator::DEFAULT_REASONING_EFFORT.to_string(),
+            ),
+            extra_body: Vec::new(),
             connect_timeout: OpenAiChatEvaluator::CONNECT_TIMEOUT,
             read_timeout: OpenAiChatEvaluator::READ_TIMEOUT,
         }
@@ -504,6 +564,46 @@ impl OpenAiChatEvaluatorBuilder {
         self
     }
 
+    /// Set the `reasoning_effort` body field
+    /// (`"none" | "low" | "medium" | "high"`).
+    ///
+    /// Defaults to [`OpenAiChatEvaluator::DEFAULT_REASONING_EFFORT`]
+    /// (`"none"`) so reasoning-mode servers (LMStudio Qwen3.x, gemma-3-think,
+    /// gpt-oss, OpenAI o-series, etc.) emit a final answer instead of
+    /// exhausting `max_tokens` inside `reasoning_content`.  Raise to
+    /// `"low"`/`"medium"`/`"high"` when the rule benefits from chain-of-
+    /// thought.
+    pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = Some(effort.into());
+        self
+    }
+
+    /// Omit the `reasoning_effort` field from the request body entirely.
+    ///
+    /// Useful for strict servers that 400 on unknown body keys, or to
+    /// defer to the server's own default reasoning configuration.
+    pub fn disable_reasoning_effort(mut self) -> Self {
+        self.reasoning_effort = None;
+        self
+    }
+
+    /// Insert an arbitrary key/value into the request body.
+    ///
+    /// Forward-compatible escape hatch for server-specific knobs
+    /// (`top_p`, `seed`, `response_format`, `repetition_penalty`, etc.).
+    /// Entries are inserted *after* explicit fields and `reasoning_effort`,
+    /// so they can override anything set via the other builder methods.
+    /// Calling `extra_body` multiple times for the same key keeps the last
+    /// value.
+    pub fn extra_body(
+        mut self,
+        key: impl Into<String>,
+        value: serde_json::Value,
+    ) -> Self {
+        self.extra_body.push((key.into(), value));
+        self
+    }
+
     pub fn connect_timeout(mut self, d: std::time::Duration) -> Self {
         self.connect_timeout = d;
         self
@@ -544,6 +644,8 @@ impl OpenAiChatEvaluatorBuilder {
             max_tokens: self.max_tokens,
             system_prompt: self.system_prompt,
             extra_headers: self.extra_headers,
+            reasoning_effort: self.reasoning_effort,
+            extra_body: self.extra_body,
             client,
             cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
@@ -885,9 +987,81 @@ mod tests {
             .max_tokens(256)
             .system_prompt("custom system")
             .header("X-Custom", "value")
+            .reasoning_effort("low")
+            .extra_body("seed", serde_json::json!(1))
             .connect_timeout(std::time::Duration::from_secs(5))
             .read_timeout(std::time::Duration::from_secs(15))
             .build();
+    }
+
+    // ── BUG-038 regression: reasoning_effort + extra_body in request body ────
+
+    #[test]
+    #[cfg(feature = "llm")]
+    fn build_request_body_includes_default_reasoning_effort() {
+        let evaluator = OpenAiChatEvaluatorBuilder::new()
+            .endpoint("http://localhost:1234/v1/chat/completions")
+            .model("local-model")
+            .build();
+        let body = evaluator.build_request_body("hello");
+        assert_eq!(
+            body.get("reasoning_effort"),
+            Some(&serde_json::Value::String("none".into())),
+            "default body must include reasoning_effort=\"none\" (BUG-038)"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "llm")]
+    fn build_request_body_with_extra_body_keys_are_present() {
+        let evaluator = OpenAiChatEvaluatorBuilder::new()
+            .endpoint("http://localhost:1234/v1/chat/completions")
+            .model("local-model")
+            .reasoning_effort("low")
+            .extra_body("seed", serde_json::json!(42))
+            .extra_body("top_p", serde_json::json!(0.9))
+            .build();
+        let body = evaluator.build_request_body("prompt");
+        assert_eq!(
+            body.get("reasoning_effort"),
+            Some(&serde_json::Value::String("low".into()))
+        );
+        assert_eq!(body.get("seed"), Some(&serde_json::json!(42)));
+        assert_eq!(body.get("top_p"), Some(&serde_json::json!(0.9)));
+    }
+
+    #[test]
+    #[cfg(feature = "llm")]
+    fn build_request_body_extra_body_can_override_explicit() {
+        // Documents the override semantics: extra_body wins over explicit
+        // setters because it's inserted last.
+        let evaluator = OpenAiChatEvaluatorBuilder::new()
+            .endpoint("http://localhost:1234/v1/chat/completions")
+            .model("local-model")
+            .temperature(0.0)
+            .extra_body("temperature", serde_json::json!(0.9))
+            .build();
+        let body = evaluator.build_request_body("prompt");
+        assert_eq!(
+            body.get("temperature"),
+            Some(&serde_json::json!(0.9)),
+            "extra_body must win over .temperature() (insertion order)"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "llm")]
+    fn build_request_body_disable_reasoning_effort_omits_field() {
+        let evaluator = OpenAiChatEvaluatorBuilder::new()
+            .endpoint("http://localhost:1234/v1/chat/completions")
+            .model("local-model")
+            .disable_reasoning_effort()
+            .build();
+        let body = evaluator.build_request_body("prompt");
+        assert!(
+            body.get("reasoning_effort").is_none(),
+            "disable_reasoning_effort() must omit the key entirely; body: {body}"
+        );
     }
 
     #[test]
