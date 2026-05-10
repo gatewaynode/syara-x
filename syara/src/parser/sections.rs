@@ -182,10 +182,7 @@ pub(crate) fn parse_similarity_section(body: &str) -> Result<Vec<SimilarityRule>
         if line.is_empty() {
             continue;
         }
-        let (identifier, pattern, params) = match parse_quoted_section_line(line, idx + 1)? {
-            Some(parts) => parts,
-            None => continue,
-        };
+        let (identifier, pattern, params) = parse_quoted_section_line(line, idx + 1)?;
         let threshold: f64 = params
             .get("threshold")
             .and_then(|v| v.parse().ok())
@@ -224,10 +221,7 @@ pub(crate) fn parse_phash_section(body: &str) -> Result<Vec<PHashRule>, SyaraErr
         if line.is_empty() {
             continue;
         }
-        let (identifier, file_path, params) = match parse_quoted_section_line(line, idx + 1)? {
-            Some(parts) => parts,
-            None => continue,
-        };
+        let (identifier, file_path, params) = parse_quoted_section_line(line, idx + 1)?;
         let threshold: f64 = params
             .get("threshold")
             .and_then(|v| v.parse().ok())
@@ -258,10 +252,7 @@ pub(crate) fn parse_classifier_section(body: &str) -> Result<Vec<ClassifierRule>
         if line.is_empty() {
             continue;
         }
-        let (identifier, pattern, params) = match parse_quoted_section_line(line, idx + 1)? {
-            Some(parts) => parts,
-            None => continue,
-        };
+        let (identifier, pattern, params) = parse_quoted_section_line(line, idx + 1)?;
         let threshold: f64 = params
             .get("threshold")
             .and_then(|v| v.parse().ok())
@@ -374,29 +365,39 @@ type SectionLineParts = (String, String, HashMap<String, String>);
 
 /// Parse one of the standard `$id = "pattern" key=value ...` section
 /// lines (similarity, phash, classifier — all of which require a
-/// quoted string body, not a regex literal). Returns `None` for lines
-/// that don't match the expected shape so callers can skip silently
-/// (preserving the prior tolerant behavior of `SECTION_LINE_RE`).
+/// quoted string body, not a regex literal). Returns a `ParseError`
+/// for any non-blank line that doesn't match the expected shape;
+/// callers strip blank lines before calling. Strict by design — the
+/// prior tolerant `Ok(None)` would silently swallow typos like
+/// `foo = "..."` (missing `$`) and lose the user's rule.
 fn parse_quoted_section_line(
     line: &str,
     line_no: usize,
-) -> Result<Option<SectionLineParts>, SyaraError> {
+) -> Result<SectionLineParts, SyaraError> {
     let mut s = Scanner::new(line, line_no);
-    let identifier = match s.consume_identifier() {
-        Ok(id) if id.starts_with('$') => id,
-        _ => return Ok(None),
-    };
-    s.eat_inline_ws();
-    if s.expect_byte(b'=').is_err() {
-        return Ok(None);
+    let identifier = s.consume_identifier()?;
+    if !identifier.starts_with('$') {
+        return Err(SyaraError::ParseError {
+            line: line_no,
+            col: 1,
+            message: format!(
+                "expected `$` to start rule identifier, got `{identifier}`"
+            ),
+        });
     }
     s.eat_inline_ws();
+    s.expect_byte(b'=')?;
+    s.eat_inline_ws();
     if s.peek_byte() != Some(b'"') {
-        return Ok(None);
+        return Err(SyaraError::ParseError {
+            line: line_no,
+            col: s.col(),
+            message: "expected quoted pattern after `=`".into(),
+        });
     }
     let pattern = s.consume_quoted_string()?;
     let params = collect_kv_params_until_newline(&mut s);
-    Ok(Some((identifier, pattern, params)))
+    Ok((identifier, pattern, params))
 }
 
 /// Read modifier words (alphanumeric tokens) from the current scanner

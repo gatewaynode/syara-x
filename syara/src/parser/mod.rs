@@ -963,6 +963,67 @@ third line\"\"\"
         assert_eq!(rules[0].llm[1].pattern, "second prompt");
     }
 
+    /// Strict-skip parity for the per-line `parse_quoted_section_line`
+    /// helper (similarity / phash / classifier sections). A typo like
+    /// `foo = "..."` (missing `$`) used to silently `Ok(None)` and
+    /// drop the rule. Now errors with a clear `expected $` message.
+    #[test]
+    fn test_similarity_section_missing_dollar_is_parse_error() {
+        let src = r#"
+        rule typo_in_similarity {
+            similarity:
+                $s1 = "valid"
+                s2 = "missing dollar"
+            condition:
+                $s1
+        }
+        "#;
+        let err = SyaraParser::new().parse_str(src).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("expected `$`") && msg.contains("rule identifier"),
+            "expected strict-skip error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_phash_section_missing_quoted_pattern_is_parse_error() {
+        // `$p1 =` with nothing quoted — should error, not silently skip.
+        let src = r#"
+        rule typo_in_phash {
+            phash:
+                $p1 = no_quotes_here
+            condition:
+                $p1
+        }
+        "#;
+        assert!(SyaraParser::new().parse_str(src).is_err());
+    }
+
+    #[test]
+    fn test_classifier_section_stray_text_is_parse_error() {
+        let src = r#"
+        rule typo_in_classifier {
+            classifier:
+                $c1 = "valid"
+                this is just stray text
+            condition:
+                $c1
+        }
+        "#;
+        assert!(SyaraParser::new().parse_str(src).is_err());
+    }
+
+    /// Regression: blank lines and indentation between rules in
+    /// per-line quoted sections must still parse cleanly under the
+    /// strict policy. Only non-blank, non-`$id =` content errors.
+    #[test]
+    fn test_similarity_section_blank_lines_between_rules_ok() {
+        let src = "rule sim_blanks {\n    similarity:\n        $s1 = \"first\"\n\n        $s2 = \"second\"\n    condition:\n        $s1\n}\n";
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules[0].similarity.len(), 2);
+    }
+
     /// LLM-section strict-skip: a typo like `pp1 = "..."` (missing
     /// `$`) used to be silently swallowed, hiding the user's rule
     /// from the compiled output. The strict path returns ParseError

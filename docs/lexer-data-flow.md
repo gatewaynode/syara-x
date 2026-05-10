@@ -265,14 +265,6 @@ Downstream, `Regex::new("")` matches the empty string at every position
 regex hits `StringMatcher::validate`. Likely benign; flag for
 consideration.
 
-### `parse_quoted_section_line` over-tolerant skip — [hygiene]
-
-`sections.rs:329-346` returns `Ok(None)` for any non-`$id =` line.
-Means `$$foo = "bar"`, `foo = "bar"` (missing `$`), and totally
-unrelated lines all silently skip. Trade-off: tolerance vs
-typo-detection. Cheap to add a "looks-like-attempted-rule" warning now
-that we have a real lexer.
-
 ### Brace-counter `b'/'` arm requires `=` immediately before — [bug-risk]
 
 `mod.rs:213-220` walks back over spaces/tabs and only enters regex mode
