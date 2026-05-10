@@ -336,34 +336,6 @@ impl<'a> Scanner<'a> {
     }
 }
 
-/// Process escape sequences in a parsed string literal. Retained for
-/// the parser test that pinned escape-sequence semantics before the
-/// scanner replaced the regex-over-line tokenizer.
-#[cfg(test)]
-pub(super) fn unescape_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('"') => out.push('"'),
-                Some('\\') => out.push('\\'),
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some('r') => out.push('\r'),
-                Some(other) => {
-                    out.push('\\');
-                    out.push(other);
-                }
-                None => out.push('\\'),
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -772,12 +744,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unescape_string_sequences() {
-        assert_eq!(unescape_string(r#"hello"#), "hello");
-        assert_eq!(unescape_string(r#"say \"hi\""#), "say \"hi\"");
-        assert_eq!(unescape_string(r#"a\\b"#), "a\\b");
-        assert_eq!(unescape_string(r#"line\none"#), "line\none");
-        assert_eq!(unescape_string(r#"tab\there"#), "tab\there");
-    }
 }

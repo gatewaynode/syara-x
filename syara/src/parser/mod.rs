@@ -338,7 +338,7 @@ fn parse_rule_block(block: &str) -> Result<Rule, SyaraError> {
 mod tests {
     use super::*;
     use crate::models::Modifier;
-    use scanner::unescape_string;
+    use scanner::Scanner;
 
     #[test]
     fn test_parse_basic_rule() {
@@ -588,13 +588,30 @@ mod tests {
         assert_eq!(rules.len(), 200);
     }
 
+    /// Pin the escape-sequence semantics of `Scanner::consume_quoted_string`
+    /// from the parser-module side. Drives the scanner directly so the
+    /// contract this test enforces and the contract the production
+    /// section parsers depend on are the same code path — no chance of
+    /// drift via a duplicated escape-table helper.
     #[test]
-    fn test_unescape_string_sequences() {
-        assert_eq!(unescape_string(r#"hello"#), "hello");
-        assert_eq!(unescape_string(r#"say \"hi\""#), "say \"hi\"");
-        assert_eq!(unescape_string(r#"a\\b"#), "a\\b");
-        assert_eq!(unescape_string(r#"line\none"#), "line\none");
-        assert_eq!(unescape_string(r#"tab\there"#), "tab\there");
+    fn test_quoted_string_escape_sequences() {
+        let cases = [
+            (r#""hello""#, "hello"),
+            (r#""say \"hi\"""#, r#"say "hi""#),
+            (r#""a\\b""#, "a\\b"),
+            (r#""line\none""#, "line\none"),
+            (r#""tab\there""#, "tab\there"),
+            // Unknown escape passes through the `\` + next char raw.
+            (r#""\z""#, r"\z"),
+        ];
+        for (src, expected) in cases {
+            let mut s = Scanner::new(src, 1);
+            assert_eq!(
+                s.consume_quoted_string().expect("scanner parse"),
+                expected,
+                "input: {src:?}"
+            );
+        }
     }
 
     // ── Triple-quoted LLM patterns (Python parity) ─────────────────────

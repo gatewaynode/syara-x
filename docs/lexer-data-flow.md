@@ -248,15 +248,6 @@ slice**, not the source file. Real file line is `meta:` keyword line +
 idx. Same as old code, but the new lexer surfaces line numbers
 prominently in errors, making the misleading number more visible.
 
-### `unescape_string` duplicates `consume_quoted_string` — [design]
-
-`scanner.rs:295-318` is `#[cfg(test)] pub(super)` and exists for one
-test in `parser/mod.rs::tests`. It duplicates `consume_quoted_string`'s
-escape table verbatim. If one drifts, the existing test passes against
-the divergent helper and silently masks the drift. Either delete and
-rewrite the test against `Scanner::consume_quoted_string`, or add a
-parity test.
-
 ### `consume_kv_value` accepts any non-ws bareword — [hygiene]
 
 `scanner.rs:268-285`: no positive validation of bareword shape.
@@ -274,15 +265,6 @@ Downstream, `Regex::new("")` matches the empty string at every position
 regex hits `StringMatcher::validate`. Likely benign; flag for
 consideration.
 
-### Flag-rejection is BREAKING without migration story — [bug-risk]
-
-`scanner.rs:251-267` rejects any flag char other than `i`. Old code
-silently dropped `s`, `m`, `x`, etc. `CHANGELOG.md` calls this out, but
-the migration ("use inline flags" — `(?s)`, `(?m)`) is only mentioned
-in the v0.3.0 entry, not v0.4.0 BREAKING. A user upgrading 0.3 → 0.4
-with `/abc/sm` rules will get a hard error and have to rediscover the
-inline-flag idiom.
-
 ### `parse_quoted_section_line` over-tolerant skip — [hygiene]
 
 `sections.rs:329-346` returns `Ok(None)` for any non-`$id =` line.
@@ -290,12 +272,6 @@ Means `$$foo = "bar"`, `foo = "bar"` (missing `$`), and totally
 unrelated lines all silently skip. Trade-off: tolerance vs
 typo-detection. Cheap to add a "looks-like-attempted-rule" warning now
 that we have a real lexer.
-
-### Duplicated section-end keyword lists — [hygiene]
-
-`sections.rs:73, 109, 161, 199, 232, 269` — every parser hard-codes the
-next-sections list. Adding a new section means editing 6 places. Easy
-win to extract a `const SECTION_ORDER: &[&str]` and slice from it.
 
 ### Brace-counter `b'/'` arm requires `=` immediately before — [bug-risk]
 

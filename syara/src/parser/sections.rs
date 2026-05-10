@@ -17,22 +17,43 @@ use crate::models::{
 
 use super::scanner::Scanner;
 
+// ── Section ordering ────────────────────────────────────────────────────────
+
+/// Canonical section order within a rule block. `section_content` uses
+/// the suffix of this list (everything after the requested section) as
+/// the set of "next sections" that terminate the body slice. Keeping
+/// the order in one place avoids the prior 6-site duplication of the
+/// trailing-section list across the per-section parsers.
+pub(crate) const SECTION_ORDER: &[&str] = &[
+    "meta",
+    "strings",
+    "similarity",
+    "phash",
+    "classifier",
+    "llm",
+    "condition",
+];
+
+fn next_sections(current: &str) -> &'static [&'static str] {
+    let idx = SECTION_ORDER
+        .iter()
+        .position(|&s| s == current)
+        .expect("section name must appear in SECTION_ORDER");
+    &SECTION_ORDER[idx + 1..]
+}
+
 // ── Section content extractor ───────────────────────────────────────────────
 
 /// Locate the body of a named section (`strings:`, `meta:`, etc.) within
 /// a rule block. The keyword set is fixed and small, so the dynamic
 /// regex compile is cached behind a `LazyLock<Mutex<HashMap>>`.
-pub(crate) fn section_content<'a>(
-    body: &'a str,
-    section: &str,
-    next_sections: &[&str],
-) -> Option<&'a str> {
+pub(crate) fn section_content<'a>(body: &'a str, section: &str) -> Option<&'a str> {
     let header_re = section_header_regex(section)?;
     let m = header_re.find(body)?;
     let start = m.end();
 
     let mut end = body.len();
-    for &ns in next_sections {
+    for &ns in next_sections(section) {
         if let Some(nre) = section_header_regex(ns) {
             if let Some(nm) = nre.find(&body[start..]) {
                 end = end.min(start + nm.start());
@@ -60,11 +81,7 @@ fn section_header_regex(section: &str) -> Option<Regex> {
 
 pub(crate) fn parse_meta_section(body: &str) -> HashMap<String, String> {
     let mut meta = HashMap::new();
-    let content = match section_content(
-        body,
-        "meta",
-        &["strings", "similarity", "phash", "classifier", "llm", "condition"],
-    ) {
+    let content = match section_content(body, "meta") {
         Some(c) => c,
         None => return meta,
     };
@@ -93,11 +110,7 @@ pub(crate) fn parse_meta_section(body: &str) -> HashMap<String, String> {
 
 pub(crate) fn parse_strings_section(body: &str) -> Result<Vec<StringRule>, SyaraError> {
     let mut rules = Vec::new();
-    let content = match section_content(
-        body,
-        "strings",
-        &["similarity", "phash", "classifier", "llm", "condition"],
-    ) {
+    let content = match section_content(body, "strings") {
         Some(c) => c,
         None => return Ok(rules),
     };
@@ -159,11 +172,7 @@ pub(crate) fn parse_strings_section(body: &str) -> Result<Vec<StringRule>, Syara
 
 pub(crate) fn parse_similarity_section(body: &str) -> Result<Vec<SimilarityRule>, SyaraError> {
     let mut rules = Vec::new();
-    let content = match section_content(
-        body,
-        "similarity",
-        &["phash", "classifier", "llm", "condition"],
-    ) {
+    let content = match section_content(body, "similarity") {
         Some(c) => c,
         None => return Ok(rules),
     };
@@ -205,7 +214,7 @@ pub(crate) fn parse_similarity_section(body: &str) -> Result<Vec<SimilarityRule>
 
 pub(crate) fn parse_phash_section(body: &str) -> Result<Vec<PHashRule>, SyaraError> {
     let mut rules = Vec::new();
-    let content = match section_content(body, "phash", &["classifier", "llm", "condition"]) {
+    let content = match section_content(body, "phash") {
         Some(c) => c,
         None => return Ok(rules),
     };
@@ -239,7 +248,7 @@ pub(crate) fn parse_phash_section(body: &str) -> Result<Vec<PHashRule>, SyaraErr
 
 pub(crate) fn parse_classifier_section(body: &str) -> Result<Vec<ClassifierRule>, SyaraError> {
     let mut rules = Vec::new();
-    let content = match section_content(body, "classifier", &["llm", "condition"]) {
+    let content = match section_content(body, "classifier") {
         Some(c) => c,
         None => return Ok(rules),
     };
@@ -285,7 +294,7 @@ pub(crate) fn parse_classifier_section(body: &str) -> Result<Vec<ClassifierRule>
 /// stream rather than line-by-line.
 pub(crate) fn parse_llm_section(body: &str) -> Result<Vec<LLMRule>, SyaraError> {
     let mut rules = Vec::new();
-    let content = match section_content(body, "llm", &["condition"]) {
+    let content = match section_content(body, "llm") {
         Some(c) => c,
         None => return Ok(rules),
     };
@@ -350,7 +359,7 @@ pub(crate) fn parse_llm_section(body: &str) -> Result<Vec<LLMRule>, SyaraError> 
 }
 
 pub(crate) fn parse_condition_section(body: &str) -> String {
-    let content = match section_content(body, "condition", &[]) {
+    let content = match section_content(body, "condition") {
         Some(c) => c,
         None => return String::new(),
     };

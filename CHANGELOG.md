@@ -35,6 +35,14 @@ public API.
   silently dropped (e.g. `/abc/sm` previously parsed as flags `i?`
   and dropped `s` and `m`; now errors with
   `unsupported regex flag '...' (only 'i' is recognized)`).
+  **Migration:** rules that relied on the silently-dropped flags
+  should switch to inline flags inside the pattern body — `(?s)`
+  for dotall, `(?m)` for multiline, `(?i)` for case-insensitive,
+  `(?x)` for extended mode. Example: `/foo.bar/sm` becomes
+  `/(?sm)foo.bar/`. Inline flags are part of the `regex` crate
+  syntax and have been supported since v0.3.0; this BREAKING
+  change only removes the silent-drop fallback for trailing
+  flag letters.
 
 ### Fixed
 
