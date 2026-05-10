@@ -43,6 +43,24 @@ impl<'a> Scanner<'a> {
         self.pos
     }
 
+    /// 1-indexed column of the current position **within the current
+    /// line**. Derived from `pos` and the position of the most recent
+    /// `\n` in `src` (byte-indexed; safe for ASCII inputs, which is
+    /// what `.syara` rule files contain in practice).
+    ///
+    /// For per-line section parsers (where `src` is a single trimmed
+    /// line containing no `\n`), this is `pos + 1`. For the LLM-stream
+    /// parser (where `src` spans newlines), this resets to 1 after
+    /// each `\n`.
+    pub(crate) fn col(&self) -> usize {
+        let bound = self.pos.min(self.src.len());
+        let prefix = &self.src.as_bytes()[..bound];
+        match prefix.iter().rposition(|&b| b == b'\n') {
+            Some(nl_pos) => bound - nl_pos,
+            None => bound + 1,
+        }
+    }
+
     pub(crate) fn at_end(&self) -> bool {
         self.pos >= self.src.len()
     }
@@ -89,6 +107,7 @@ impl<'a> Scanner<'a> {
     fn err(&self, msg: impl Into<String>) -> SyaraError {
         SyaraError::ParseError {
             line: self.line,
+            col: self.col(),
             message: msg.into(),
         }
     }
@@ -468,6 +487,52 @@ mod tests {
     fn kv_value_bareword_negative_float() {
         let mut s = scan("-0.85 next");
         assert_eq!(s.consume_kv_value().unwrap(), "-0.85");
+    }
+
+    /// `col()` for a per-line scanner (no `\n` in src) is `pos + 1`.
+    #[test]
+    fn col_per_line_scanner() {
+        let mut s = scan("$foo = \"bar\"");
+        assert_eq!(s.col(), 1);
+        s.consume_identifier().unwrap(); // consumes `$foo` (4 bytes)
+        assert_eq!(s.col(), 5);
+        s.eat_inline_ws();
+        assert_eq!(s.col(), 6); // on `=`
+    }
+
+    /// `col()` resets to 1 after each `\n` in a multi-line source
+    /// (LLM-stream scanner case).
+    #[test]
+    fn col_resets_after_newline() {
+        let src = "abc\ndef";
+        let mut s = Scanner::new(src, 1);
+        assert_eq!(s.col(), 1);
+        s.bump(); // a
+        s.bump(); // b
+        s.bump(); // c → pos=3, on `\n`
+        assert_eq!(s.col(), 4); // col before consuming the newline
+        s.bump(); // \n → pos=4, line=2
+        assert_eq!(s.line(), 2);
+        assert_eq!(s.col(), 1); // first byte of new line
+        s.bump(); // d
+        assert_eq!(s.col(), 2);
+    }
+
+    /// Errors raised by Scanner methods carry the column where the
+    /// failure happened, surfaced via the `Display` impl on `SyaraError`.
+    #[test]
+    fn err_includes_col_in_display() {
+        // Identifier missing after `$`: scanner is at pos 0 when
+        // `consume_identifier` fails on empty-after-$.
+        let mut s = scan("   nope = \"x\"");
+        s.eat_inline_ws();
+        // Now pos = 3, col = 4. Force an error by expecting `=` here.
+        let err = s.expect_byte(b'=').unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("col 4"),
+            "expected col in error message, got: {msg}"
+        );
     }
 
     #[test]

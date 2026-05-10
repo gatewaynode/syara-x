@@ -206,7 +206,7 @@ since v0.3.0.)
 
 | Source | Error variant | Surfaces at |
 |---|---|---|
-| Unterminated quoted/regex/triple-quoted literal | `SyaraError::ParseError { line, message }` | parse-time |
+| Unterminated quoted/regex/triple-quoted literal | `SyaraError::ParseError { line, col, message }` | parse-time |
 | Unknown regex flag (anything other than `i`) | `SyaraError::ParseError` | parse-time (BREAKING from v0.3) |
 | Missing `=` after identifier | `SyaraError::ParseError` (LLM) / silent skip (others) | parse-time |
 | Patterns present but no condition section | `SyaraError::ParseError` | parse-time (BUG-021) |
@@ -220,23 +220,25 @@ since v0.3.0.)
 Severity tags: **[design]** = architectural smell, **[bug-risk]** =
 could bite under specific input, **[hygiene]** = code-quality only.
 
-### Three state machines, one parity test — [design]
+### Three state machines (test scaffolding now complete) — [design]
 
 `scanner.rs::consume_regex_literal`, `mod.rs::remove_comments`
 (`Mode::Regex`), and `mod.rs::split_rules` (the `b'/'` arm) all
 classify "what's inside a regex literal." Same problem for strings (3
-sites) and triple-quotes (3 sites). The parity test
-(`parity_with_split_rules_regex_consumption`,
-`scanner.rs:438-475`) covers **one** edge: scanner ↔ split_rules **for
-regex bodies**.
+sites) and triple-quotes (3 sites).
 
-Missing parity coverage:
-- Scanner ↔ `remove_comments` for regex bodies
-- All three sites for `consume_quoted_string` / `Mode::String`
-- All three sites for `consume_triple_quoted_string` / `Mode::TripleString`
+Parity test coverage (added since first-pass):
+- Scanner ↔ `split_rules` for regex / string / triple-quote bodies
+  (mirror tests, `scanner.rs::tests::parity_with_split_rules_*`)
+- Scanner ↔ `remove_comments` for regex / string / triple-quote bodies
+  (behavioral end-to-end tests in `mod.rs::tests`)
+- `split_rules` brace-counter parity for `}` inside string and
+  triple-quote bodies (regex `{n,m}` covered by an existing test)
 
-This is the divergence surface the consolidation follow-up is meant to
-address. Until then, the test scaffolding under-covers the invariant.
+The remaining design issue is structural — three independently-
+maintained state machines vs. one shared lexer crate-internal helper.
+The parity tests pin behavioral agreement so the consolidation can
+proceed safely.
 
 ### Asymmetric line tracking across `consume_*` methods — [bug-risk]
 
@@ -259,13 +261,6 @@ bareword loop stops at `\r` (it checks `is_ascii_whitespace`), but
 `collect_modifiers`'s newline-or-end check
 (`sections.rs:355-359`) doesn't peek past `\r` to see `\n`. No CRLF
 test in the suite — would be a one-line fixture.
-
-### Errors carry `line` but not `col` — [design]
-
-`Scanner::err` (`scanner.rs:96-101`) only emits `{ line, message }`.
-Scanner has `pos` (byte offset within the slice) — it's just being
-thrown away. Parity with the legacy regex-over-line idiom (which had
-no position info), but a free upgrade we didn't take.
 
 ### `idx + 1` is "section-relative" line number — [design]
 

@@ -275,6 +275,7 @@ fn parse_rule_block(block: &str) -> Result<Rule, SyaraError> {
         .captures(block)
         .ok_or_else(|| SyaraError::ParseError {
             line: 0,
+            col: 0,
             message: format!("invalid rule header: {}", &block[..block.len().min(80)]),
         })?;
 
@@ -311,6 +312,7 @@ fn parse_rule_block(block: &str) -> Result<Rule, SyaraError> {
     if has_patterns && condition.is_empty() {
         return Err(SyaraError::ParseError {
             line: 0,
+            col: 0,
             message: format!(
                 "rule '{}' has patterns but no condition section",
                 name
@@ -838,6 +840,57 @@ third line\"\"\"
             rules[0].llm[0].pattern,
             "body with { and } braces inside"
         );
+    }
+
+    /// Parse errors include a 1-indexed column number in the Display
+    /// output. Pre-fix, errors reported only line, leaving consumers
+    /// to grep through the line themselves to find the offending byte.
+    #[test]
+    fn test_parse_error_includes_col() {
+        // Unterminated quoted string: scanner errors at the position
+        // it was looking for the closing `"`. The trimmed line is
+        // `$s = "no end`, so the error fires at pos 12 (col 13) which
+        // is one past the last byte.
+        let src = r#"
+        rule bad {
+            strings:
+                $s = "no end
+            condition:
+                $s
+        }
+        "#;
+        let err = SyaraParser::new().parse_str(src).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("col "),
+            "parse error must include `col N`, got: {msg}"
+        );
+        assert!(
+            msg.contains("unterminated"),
+            "expected unterminated-string error, got: {msg}"
+        );
+    }
+
+    /// Parse errors WITHOUT useful column info (rule-header level
+    /// failures that fire after section parsing) omit the col suffix
+    /// rather than emitting `col 0`.
+    #[test]
+    fn test_parse_error_omits_col_when_unknown() {
+        // Patterns without condition: error fires in `parse_rule_block`
+        // with line=0, col=0 sentinel. Display must not show "col 0".
+        let src = r#"
+        rule no_cond {
+            strings:
+                $s1 = "hello"
+        }
+        "#;
+        let err = SyaraParser::new().parse_str(src).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("col 0"),
+            "col=0 sentinel must not appear in Display output, got: {msg}"
+        );
+        assert!(msg.contains("no condition"), "expected the right error: {msg}");
     }
 
     /// `split_rules` two-rule split with brace inside literal: the

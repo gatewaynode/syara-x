@@ -132,6 +132,7 @@ pub(crate) fn parse_strings_section(body: &str) -> Result<Vec<StringRule>, Syara
             _ => {
                 return Err(SyaraError::ParseError {
                     line: idx + 1,
+                    col: s.col(),
                     message: format!(
                         "expected `\"` or `/` after `=` in string rule, got: {}",
                         line
@@ -318,6 +319,7 @@ pub(crate) fn parse_llm_section(body: &str) -> Result<Vec<LLMRule>, SyaraError> 
             _ => {
                 return Err(SyaraError::ParseError {
                     line: line_at_start,
+                    col: s.col(),
                     message: "expected quoted pattern after `=` in llm rule".into(),
                 });
             }
