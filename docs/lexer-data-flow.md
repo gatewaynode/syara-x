@@ -257,16 +257,6 @@ the divergent helper and silently masks the drift. Either delete and
 rewrite the test against `Scanner::consume_quoted_string`, or add a
 parity test.
 
-### `parse_llm_section` skip-non-rule-line is over-tolerant — [bug-risk]
-
-`sections.rs:280-291`: when `peek_byte() != Some(b'$')`, bump until
-`\n` and continue. Effects:
-- Typo `pp1 = "..."` (missing `$`) silently skips the whole rule
-- Stray text between rules is silently swallowed
-
-Parity with old regex-line idiom. Worth deciding whether the LLM
-stream should be stricter than per-line sections, or stay tolerant.
-
 ### `consume_kv_value` accepts any non-ws bareword — [hygiene]
 
 `scanner.rs:268-285`: no positive validation of bareword shape.

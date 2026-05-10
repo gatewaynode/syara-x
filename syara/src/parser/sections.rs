@@ -297,14 +297,16 @@ pub(crate) fn parse_llm_section(body: &str) -> Result<Vec<LLMRule>, SyaraError> 
             break;
         }
         if s.peek_byte() != Some(b'$') {
-            // Skip non-rule lines (stray comments, etc.) — bump to next newline.
-            while let Some(b) = s.peek_byte() {
-                s.bump();
-                if b == b'\n' {
-                    break;
-                }
-            }
-            continue;
+            // Strict: the comment stripper has already removed `//`
+            // and `/* */` comments, so any non-blank, non-`$id`
+            // content here is a typo (e.g. `pp1 = ...` missing the
+            // `$`) or stray text. Silently skipping silently loses
+            // the user's rule — refuse instead.
+            return Err(SyaraError::ParseError {
+                line: s.line(),
+                col: s.col(),
+                message: "expected `$` to start an llm rule identifier".into(),
+            });
         }
 
         let line_at_start = s.line();

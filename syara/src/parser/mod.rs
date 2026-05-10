@@ -946,6 +946,58 @@ third line\"\"\"
         assert_eq!(rules[0].llm[1].pattern, "second prompt");
     }
 
+    /// LLM-section strict-skip: a typo like `pp1 = "..."` (missing
+    /// `$`) used to be silently swallowed, hiding the user's rule
+    /// from the compiled output. The strict path returns ParseError
+    /// citing the line so the typo surfaces immediately.
+    #[test]
+    fn test_llm_section_missing_dollar_is_parse_error() {
+        let src = r#"
+        rule typo_in_llm {
+            llm:
+                $p1 = "valid rule"
+                pp1 = "missing dollar"
+            condition:
+                $p1
+        }
+        "#;
+        let err = SyaraParser::new().parse_str(src).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("expected `$`") && msg.contains("llm rule identifier"),
+            "expected strict-skip error, got: {msg}"
+        );
+    }
+
+    /// Stray non-rule text between LLM rules also errors (instead of
+    /// being silently swallowed). The comment stripper has already
+    /// removed `//` and `/* */` comments by this point, so anything
+    /// left that isn't a `$id = ...` rule is a typo or noise.
+    #[test]
+    fn test_llm_section_stray_text_is_parse_error() {
+        let src = r#"
+        rule stray_text_in_llm {
+            llm:
+                $p1 = "first"
+                this is just stray text
+                $p2 = "second"
+            condition:
+                $p1
+        }
+        "#;
+        assert!(SyaraParser::new().parse_str(src).is_err());
+    }
+
+    /// Regression: blank lines and indentation between LLM rules
+    /// must still parse cleanly under the strict policy — only
+    /// non-blank, non-`$id` content errors.
+    #[test]
+    fn test_llm_section_blank_lines_between_rules_ok() {
+        let src = "rule llm_blanks {\n    llm:\n        $p1 = \"first\"\n\n        $p2 = \"second\"\n    condition:\n        $p1\n}\n";
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules[0].llm.len(), 2);
+    }
+
     /// Triple-quoted bodies in the LLM section preserve CRLF inside
     /// the body verbatim (matches the "raw body" Python-parity
     /// contract for triple-quoted strings — we don't normalize line
