@@ -167,6 +167,32 @@ fn remove_comments(input: &str) -> String {
 
 // ── Brace-counting rule splitter (BUG-005: byte-offset based) ───────────────
 
+/// Decide whether the `/` byte at `slash_pos` opens a regex literal
+/// (so the brace counter should skip the body and any trailing flag
+/// letters, ignoring any `{` / `}` inside).
+///
+/// Heuristic: walk back over inline whitespace (` `, `\t`) within the
+/// current rule block; the predecessor must be `=`. The DSL only uses
+/// `=` to introduce a regex literal (`$id = /regex/`) — no other
+/// surface syntax produces a bare `/regex/` token. **Adding any new
+/// operator that can syntactically precede a regex literal (e.g. a
+/// future `regex matches /pat/` infix, or condition-level regex
+/// support) requires updating this predicate.** The brace-counter
+/// hardening test pins the current contract.
+///
+/// Comparison operators that end in `=` (`==`, `!=`, `<=`, `>=`)
+/// also satisfy the check. That's harmlessly wrong: a `/` after `==`
+/// is not syntactically valid in any current rule context, so
+/// entering regex mode and skipping to the next `/` produces no
+/// observable difference vs treating the `/` as a normal byte.
+fn is_regex_literal_start(bytes: &[u8], slash_pos: usize, rule_start: usize) -> bool {
+    let mut k = slash_pos;
+    while k > rule_start && (bytes[k - 1] == b' ' || bytes[k - 1] == b'\t') {
+        k -= 1;
+    }
+    k > rule_start && bytes[k - 1] == b'='
+}
+
 fn split_rules(content: &str) -> Vec<String> {
     let bytes = content.as_bytes();
     let n = bytes.len();
@@ -221,13 +247,7 @@ fn split_rules(content: &str) -> Vec<String> {
                     }
                 }
                 b'/' => {
-                    let mut k = j;
-                    while k > rule_start
-                        && (bytes[k - 1] == b' ' || bytes[k - 1] == b'\t')
-                    {
-                        k -= 1;
-                    }
-                    if k > rule_start && bytes[k - 1] == b'=' {
+                    if is_regex_literal_start(bytes, j, rule_start) {
                         j += 1;
                         while j < n {
                             if bytes[j] == b'\\' {
@@ -961,6 +981,58 @@ third line\"\"\"
         assert_eq!(rules[0].llm[0].pattern, "first prompt");
         assert_eq!(rules[0].llm[0].llm_name, "openai-api-compatible");
         assert_eq!(rules[0].llm[1].pattern, "second prompt");
+    }
+
+    /// Brace-counter hardening: a regex literal containing `{n,m}`
+    /// quantifier syntax must not have its inner braces counted as
+    /// rule braces. If `is_regex_literal_start` ever returned `false`
+    /// for a `$id = /…/` site, the brace counter would close the rule
+    /// block prematurely on the `}` of `{1,3}`.
+    #[test]
+    fn test_split_rules_regex_quantifier_braces_not_counted() {
+        let src = r#"
+        rule first {
+            strings:
+                $s1 = /foo{1,3}bar/
+            condition:
+                $s1
+        }
+        rule second {
+            strings:
+                $s2 = "x"
+            condition:
+                $s2
+        }
+        "#;
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].name, "first");
+        assert_eq!(rules[1].name, "second");
+        assert_eq!(rules[0].strings[0].pattern, "foo{1,3}bar");
+        assert!(rules[0].strings[0].is_regex);
+    }
+
+    /// Direct unit test for the regex-literal predicate. Pins the
+    /// invariant: only `=` (with optional inline whitespace) makes
+    /// `/` start a regex literal. Adding a new operator that should
+    /// also introduce a regex literal must update both the predicate
+    /// and this test.
+    #[test]
+    fn test_is_regex_literal_start_predicate() {
+        // Positive: `=` immediately before, with and without ws.
+        assert!(is_regex_literal_start(b"$x =/", 4, 0));
+        assert!(is_regex_literal_start(b"$x = /", 5, 0));
+        assert!(is_regex_literal_start(b"$x =\t/", 5, 0));
+        assert!(is_regex_literal_start(b"$x =   /", 7, 0));
+        // Comparison operators ending in `=` also satisfy the check
+        // (harmless: no current rule context permits `==/.../`).
+        assert!(is_regex_literal_start(b"a == /", 5, 0));
+        // Negative: `/` at rule_start (no preceding context).
+        assert!(!is_regex_literal_start(b"/abc/", 0, 0));
+        // Negative: preceded by an alphanumeric, not `=`.
+        assert!(!is_regex_literal_start(b"abc /", 4, 0));
+        // Negative: only inline ws back to rule_start.
+        assert!(!is_regex_literal_start(b"   /", 3, 0));
     }
 
     /// Strict-skip parity for the per-line `parse_quoted_section_line`

@@ -265,13 +265,6 @@ Downstream, `Regex::new("")` matches the empty string at every position
 regex hits `StringMatcher::validate`. Likely benign; flag for
 consideration.
 
-### Brace-counter `b'/'` arm requires `=` immediately before — [bug-risk]
-
-`mod.rs:213-220` walks back over spaces/tabs and only enters regex mode
-if the preceding non-ws byte is `=`. The DSL only uses `=` so this is
-fine; flagging as a "thin invariant" — adding any new operator near
-`/` would silently break this.
-
 ## Key invariants
 
 - **Three state machines must agree on literal classification.** Only
@@ -288,8 +281,11 @@ fine; flagging as a "thin invariant" — adding any new operator near
   injection, alternative compile path), regex errors become silent
   again.
 - **`split_rules` brace counter assumes `=` is the only op preceding a
-  regex literal.** A new infix operator near `/` would silently break
-  rule splitting for any regex on its right side.
+  regex literal.** Encoded in `is_regex_literal_start`
+  (`mod.rs::is_regex_literal_start`) and pinned by
+  `test_is_regex_literal_start_predicate`. Adding a new operator that
+  can introduce `/regex/` (e.g. condition-level regex support) must
+  update both the predicate and the test.
 - **Triple-quote support is wired in 3 layers.** `scanner.rs` +
   `remove_comments` + `split_rules` all need to agree. No cross-layer
   parity test exists.
@@ -297,5 +293,6 @@ fine; flagging as a "thin invariant" — adding any new operator near
   3 layers.** Matches Python reference. If escape processing is ever
   added to one layer, all three must change.
 - **Section-end detection is keyword-list based, not structural.**
-  Adding a new section requires editing every other section's
-  `next_sections` list. Currently 6 places.
+  All section parsers consult one canonical
+  `sections.rs::SECTION_ORDER` const, so adding a new section is a
+  single-line edit there plus a new per-section parser.

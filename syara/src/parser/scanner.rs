@@ -629,7 +629,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("scanner failed on {f:?}: {e}"));
             let scanner_end = s.pos();
 
-            // Mirror split_rules' regex consumption (parser/mod.rs:188-213).
+            // Mirror split_rules' regex consumption (parser/mod.rs:249-270).
             let bytes = f.as_bytes();
             assert_eq!(bytes[0], b'/');
             let mut j = 1;
@@ -677,7 +677,7 @@ mod tests {
             let scanner_end = s.pos();
 
             // Mirror split_rules' single-quote string consumption
-            // (parser/mod.rs:210-221).
+            // (parser/mod.rs:236-248).
             let bytes = f.as_bytes();
             assert_eq!(bytes[0], b'"');
             let mut j = 1;
@@ -720,7 +720,7 @@ mod tests {
             let scanner_end = s.pos();
 
             // Mirror split_rules' triple-quote consumption
-            // (parser/mod.rs:195-209). Body is consumed byte-by-byte
+            // (parser/mod.rs:218-235). Body is consumed byte-by-byte
             // until the next `"""` triple is found.
             let bytes = f.as_bytes();
             let n = bytes.len();
