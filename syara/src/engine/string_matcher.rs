@@ -32,6 +32,24 @@ impl StringMatcher {
         format!("{}:{}", rule.pattern, mods.join(","))
     }
 
+    /// Eagerly validate that `rule.pattern` compiles to a valid regex
+    /// under the rule's modifier set. Used by `Compiler` at
+    /// `compile_str` time so malformed patterns surface as a parse-time
+    /// error rather than being silently swallowed at scan time.
+    /// (BUG-040 — `compiled_rules.rs::execute_rule`'s `_ => {}` arm
+    /// dropped these errors before this validation hook was added.)
+    pub(crate) fn validate(rule: &StringRule) -> Result<(), SyaraError> {
+        let mut tmp = StringMatcher::new();
+        tmp.compile(rule)?;
+        if rule.modifiers.contains(&Modifier::Wide) {
+            // Wide-mode regex builds a separate compiled regex via
+            // `match_wide`; force it through the same construction path.
+            // Empty input is fine — we only care about the compile step.
+            tmp.match_wide(rule, "")?;
+        }
+        Ok(())
+    }
+
     fn compile(&mut self, rule: &StringRule) -> Result<(), SyaraError> {
         let key = Self::cache_key(rule);
         if self.cache.contains_key(&key) {

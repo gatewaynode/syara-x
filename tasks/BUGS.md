@@ -1,10 +1,16 @@
 # Open Bugs
 
 Outstanding, un-fixed bugs in `syara-x`. Closed bugs live in dated archives
-(most recent: `tasks/04-24-2026_BUGS.md`).
+(most recent: `tasks/05-10-2026_BUGS.md`).
 
 Every fix must include a regression test. Dense, historical numbering —
-do not reuse. Next number: **BUG-039**.
+do not reuse. Next number: **BUG-041**.
+
+---
+
+## Open
+
+*(none currently open beyond the on-hold backend-migration bugs below)*
 
 ---
 
@@ -49,7 +55,7 @@ planned (see `ROADMAP.md`).
 
 ## How to add a new bug
 
-1. Reserve the next number (currently BUG-038).
+1. Reserve the next number (currently BUG-041).
 2. Give it one of: open / in-progress / fixed.
 3. Link to file + line where reproducible.
 4. When you close it, move it into the most recent dated archive file and

@@ -508,3 +508,159 @@ fn test_count_operator_undefined_identifier_errors() {
     let result = syara_x::compile_str(src);
     assert!(result.is_err(), "#s_missing must be rejected at compile time");
 }
+
+// ── BUG-040: malformed regex must error at compile time ────────────────
+//
+// Pre-fix, `compiled_rules.rs::execute_rule`'s `_ => {}` arm swallowed
+// `Err` from `StringMatcher::match_rule`, so a rule with a malformed
+// regex like `/[/` would compile successfully and silently return zero
+// matches at scan time. `Compiler::validate_and_compile` now eagerly
+// validates each pattern via `StringMatcher::validate`, so the error
+// surfaces at `compile_str` time instead.
+
+#[test]
+fn test_bug040_malformed_regex_errors_at_compile_time() {
+    let src = r#"
+    rule bad_regex {
+        strings:
+            $r = /[/
+        condition:
+            $r
+    }
+    "#;
+    let err = match syara_x::compile_str(src) {
+        Ok(_) => panic!(
+            "malformed regex /[/ must error at compile_str time, not silently at scan time"
+        ),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid pattern") || msg.contains("regex"),
+        "error should describe the regex problem: {msg}"
+    );
+}
+
+// ── BUG-039: regex `[\s>]` must match `>` at end-of-input ───────────────
+//
+// Reported by downstream consumer (llm_context_shield Phase 13.5b).
+// YARA-X matches `<system>` against `<\/?(system|user|assistant)[\s>]`;
+// SYARA-X did not. Worked around downstream; this test pins the fix.
+
+#[test]
+fn test_bug039_regex_class_matches_trailing_gt_at_eoi() {
+    let src = r#"
+    rule delimiter_manipulation_high {
+        strings:
+            $r = /<\/?(system|user|assistant)[\s>]/
+        condition:
+            $r
+    }
+    "#;
+    let rules = syara_x::compile_str(src)
+        .expect("rule with `[\\s>]` regex class must compile");
+
+    let results = rules.scan("<system>");
+    let m = results
+        .iter()
+        .find(|m| m.rule_name == "delimiter_manipulation_high")
+        .expect("rule should be present in scan results");
+    assert!(
+        m.matched,
+        "regex `<\\/?(system|user|assistant)[\\s>]` must match `<system>` \
+         (the `>` at end-of-input must satisfy the [\\s>] class)"
+    );
+}
+
+// ── BUG-039 corpus: shapes from llm_context_shield rules that the
+//    pre-fix parser silently miscompiled. See tasks/05-10-2026_BUGS.md.
+
+#[test]
+fn test_bug039_corpus_https_scheme_in_markdown_link() {
+    // From data_exfiltration.syara:12 — the `https?:\/\/` substring
+    // was truncated at the first `/` byte before the fix.
+    let src = r#"
+    rule md_image_url {
+        strings:
+            $u = /!\[[^\]]*\]\(https?:\/\/[^\s\)]+\)/
+        condition:
+            $u
+    }
+    "#;
+    let rules = syara_x::compile_str(src).expect("must compile");
+    let results = rules.scan("see ![alt](https://example.com/page) here");
+    let m = results.iter().find(|m| m.matched).expect("expected match");
+    assert_eq!(m.rule_name, "md_image_url");
+}
+
+#[test]
+fn test_bug039_corpus_close_sys_tag() {
+    // From delimiter_manipulation.syara:16 — `<<\s*\/SYS\s*>>` with
+    // an embedded escaped slash.
+    let src = r#"
+    rule close_sys {
+        strings:
+            $s = /<<\s*\/SYS\s*>>/i
+        condition:
+            $s
+    }
+    "#;
+    let rules = syara_x::compile_str(src).expect("must compile");
+    let results = rules.scan("trailing <<  /SYS  >> token");
+    assert!(results.iter().any(|m| m.matched));
+}
+
+#[test]
+fn test_bug039_corpus_quote_class_inside_regex() {
+    // From data_exfiltration.syara:14 — `["']` character class with a
+    // literal `"` inside the regex body.
+    let src = r#"
+    rule quote_attr {
+        strings:
+            $a = /src\s*=\s*["']http/i
+        condition:
+            $a
+    }
+    "#;
+    let rules = syara_x::compile_str(src).expect("must compile");
+    let results = rules.scan(r#"<img src="https://x.example/y">"#);
+    assert!(results.iter().any(|m| m.matched));
+}
+
+#[test]
+fn test_bug039_corpus_base64_class_with_escaped_slash() {
+    // From hidden_content.syara:28 — `[A-Za-z0-9+\/]{40,}` with `\/`
+    // inside the character class.
+    let src = r#"
+    rule b64_blob {
+        strings:
+            $b = /[A-Za-z0-9+\/]{40,}={0,2}/
+        condition:
+            $b
+    }
+    "#;
+    let rules = syara_x::compile_str(src).expect("must compile");
+    // 50-char base64-ish payload containing `/`.
+    let payload = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ0123456789+/==";
+    let results = rules.scan(payload);
+    assert!(results.iter().any(|m| m.matched));
+}
+
+// ── Latent escape bugs the same fix repaired ───────────────────────────
+
+#[test]
+fn test_quoted_string_pattern_containing_slash() {
+    // Counterpart to the regex-with-literal-" test: a literal string
+    // pattern containing `/` must not be misinterpreted as a regex.
+    let src = r#"
+    rule slash_in_string {
+        strings:
+            $s = "a/b/c"
+        condition:
+            $s
+    }
+    "#;
+    let rules = syara_x::compile_str(src).expect("must compile");
+    let results = rules.scan("path: a/b/c here");
+    assert!(results.iter().any(|m| m.matched));
+}

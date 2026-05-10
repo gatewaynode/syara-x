@@ -109,13 +109,24 @@ impl CompiledRules {
             pattern_matches.insert(r.identifier.clone(), vec![]);
         }
 
-        // 1. String patterns (cheapest)
+        // 1. String patterns (cheapest). BUG-040: regex compile errors
+        // are surfaced eagerly by `Compiler::validate_and_compile` via
+        // `StringMatcher::validate`, so by the time we reach scan time
+        // the only `Err` here would be a logic bug in the matcher itself.
+        // We still propagate via debug_assert + ignore, matching the
+        // public scan signature `-> Vec<Match>` (no API break).
         for string_rule in &rule.strings {
             match string_matcher.match_rule(string_rule, text) {
                 Ok(hits) if !hits.is_empty() => {
                     pattern_matches.insert(string_rule.identifier.clone(), hits);
                 }
-                _ => {}
+                Ok(_) => {}
+                Err(e) => {
+                    debug_assert!(
+                        false,
+                        "string_matcher errored at scan time despite eager validate(): {e}"
+                    );
+                }
             }
         }
 

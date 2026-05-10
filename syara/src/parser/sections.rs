@@ -1,6 +1,13 @@
 /// Section parsers for individual rule body sections (meta, strings, etc.).
+///
+/// Each per-line parse goes through `super::scanner::Scanner` rather than
+/// a regex-over-line capture. The scanner correctly handles escape
+/// sequences in delimited bodies (`\/`, `\"`, `\\`) — the bug class that
+/// the prior `LazyLock<Regex>` constants exhibited (see BUG-039 in
+/// `tasks/05-10-2026_BUGS.md`).
 use std::collections::HashMap;
 use std::sync::LazyLock;
+
 use regex::Regex;
 
 use crate::error::SyaraError;
@@ -8,57 +15,48 @@ use crate::models::{
     ClassifierRule, LLMRule, Modifier, PHashRule, SimilarityRule, StringRule,
 };
 
-// ── Compiled regexes (BUG-004) ──────────────────────────────────────────────
-
-static META_KV_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(\w+)\s*=\s*"([^"]*)""#).unwrap()
-});
-
-/// BUG-020: supports escaped quotes via `(?:[^"\\]|\\.)*`
-static STRING_PATTERN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(\$\w+)\s*=\s*"((?:[^"\\]|\\.)*)"\s*(.*)"#).unwrap()
-});
-
-static REGEX_PATTERN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(\$\w+)\s*=\s*/([^/]*)/(i?)\s*(.*)").unwrap()
-});
-
-/// Shared pattern for similarity, phash, classifier, llm section lines.
-static SECTION_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(\$\w+)\s*=\s*"((?:[^"\\]|\\.)*)"\s*(.*)"#).unwrap()
-});
-
-static KV_PARAMS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(\w+)=(?:"([^"]*)"|([^\s"]+))"#).unwrap()
-});
+use super::scanner::Scanner;
 
 // ── Section content extractor ───────────────────────────────────────────────
 
+/// Locate the body of a named section (`strings:`, `meta:`, etc.) within
+/// a rule block. The keyword set is fixed and small, so the dynamic
+/// regex compile is cached behind a `LazyLock<Mutex<HashMap>>`.
 pub(crate) fn section_content<'a>(
     body: &'a str,
     section: &str,
     next_sections: &[&str],
 ) -> Option<&'a str> {
-    let pattern = format!(r"(?i){}:", regex::escape(section));
-    let re = Regex::new(&pattern).ok()?;
-    let m = re.find(body)?;
+    let header_re = section_header_regex(section)?;
+    let m = header_re.find(body)?;
     let start = m.end();
 
-    // Find where the next section begins
     let mut end = body.len();
     for &ns in next_sections {
-        let np = format!(r"(?i){}:", regex::escape(ns));
-        if let Ok(nre) = Regex::new(&np) {
+        if let Some(nre) = section_header_regex(ns) {
             if let Some(nm) = nre.find(&body[start..]) {
                 end = end.min(start + nm.start());
             }
         }
     }
-
     Some(&body[start..end])
 }
 
-// ── Individual section parsers ──────────────────────────────────────────────
+fn section_header_regex(section: &str) -> Option<Regex> {
+    static SECTION_HEADER_CACHE: LazyLock<std::sync::Mutex<HashMap<String, Regex>>> =
+        LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+    let pattern = format!(r"(?i){}:", regex::escape(section));
+    let mut cache = SECTION_HEADER_CACHE.lock().ok()?;
+    if let Some(re) = cache.get(&pattern) {
+        return Some(re.clone());
+    }
+    let re = Regex::new(&pattern).ok()?;
+    cache.insert(pattern, re.clone());
+    Some(re)
+}
+
+// ── Per-section line parsers ────────────────────────────────────────────────
 
 pub(crate) fn parse_meta_section(body: &str) -> HashMap<String, String> {
     let mut meta = HashMap::new();
@@ -71,8 +69,24 @@ pub(crate) fn parse_meta_section(body: &str) -> HashMap<String, String> {
         None => return meta,
     };
 
-    for cap in META_KV_RE.captures_iter(content) {
-        meta.insert(cap[1].to_owned(), cap[2].to_owned());
+    for (idx, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut s = Scanner::new(line, idx + 1);
+        let key = match s.consume_identifier() {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        s.eat_inline_ws();
+        if s.expect_byte(b'=').is_err() {
+            continue;
+        }
+        s.eat_inline_ws();
+        if let Ok(value) = s.consume_quoted_string() {
+            meta.insert(key, value);
+        }
     }
     meta
 }
@@ -88,41 +102,57 @@ pub(crate) fn parse_strings_section(body: &str) -> Result<Vec<StringRule>, Syara
         None => return Ok(rules),
     };
 
-    for line in content.lines() {
+    for (idx, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-
-        if let Some(cap) = STRING_PATTERN_RE.captures(line) {
-            let identifier = cap[1].to_owned();
-            let pattern = unescape_string(&cap[2]);
-            let mods = parse_string_modifiers(&cap[3]);
-            rules.push(StringRule {
-                identifier,
-                pattern,
-                modifiers: mods,
-                is_regex: false,
-            });
+        let mut s = Scanner::new(line, idx + 1);
+        let identifier = match s.consume_identifier() {
+            Ok(id) if id.starts_with('$') => id,
+            _ => continue,
+        };
+        s.eat_inline_ws();
+        if s.expect_byte(b'=').is_err() {
             continue;
         }
+        s.eat_inline_ws();
 
-        if let Some(cap) = REGEX_PATTERN_RE.captures(line) {
-            let identifier = cap[1].to_owned();
-            let pattern = cap[2].to_owned();
-            let mut mods = parse_string_modifiers(&cap[4]);
-            if &cap[3] == "i" && !mods.contains(&Modifier::NoCase) {
-                mods.push(Modifier::NoCase);
+        let (pattern, is_regex, mut implicit_mods) = match s.peek_byte() {
+            Some(b'"') => (s.consume_quoted_string()?, false, Vec::new()),
+            Some(b'/') => {
+                let (regex_body, flags) = s.consume_regex_literal()?;
+                let mods = if flags.contains(&'i') {
+                    vec![Modifier::NoCase]
+                } else {
+                    Vec::new()
+                };
+                (regex_body, true, mods)
             }
-            rules.push(StringRule {
-                identifier,
-                pattern,
-                modifiers: mods,
-                is_regex: true,
-            });
-        }
-    }
+            _ => {
+                return Err(SyaraError::ParseError {
+                    line: idx + 1,
+                    message: format!(
+                        "expected `\"` or `/` after `=` in string rule, got: {}",
+                        line
+                    ),
+                });
+            }
+        };
 
+        for m in collect_modifiers(&mut s) {
+            if !implicit_mods.contains(&m) {
+                implicit_mods.push(m);
+            }
+        }
+
+        rules.push(StringRule {
+            identifier,
+            pattern,
+            modifiers: implicit_mods,
+            is_regex,
+        });
+    }
     Ok(rules)
 }
 
@@ -137,20 +167,15 @@ pub(crate) fn parse_similarity_section(body: &str) -> Result<Vec<SimilarityRule>
         None => return Ok(rules),
     };
 
-    for line in content.lines() {
+    for (idx, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let cap = match SECTION_LINE_RE.captures(line) {
-            Some(c) => c,
+        let (identifier, pattern, params) = match parse_quoted_section_line(line, idx + 1)? {
+            Some(parts) => parts,
             None => continue,
         };
-
-        let identifier = cap[1].to_owned();
-        let pattern = cap[2].to_owned();
-        let params = parse_kv_params(&cap[3]);
-
         let threshold: f64 = params
             .get("threshold")
             .and_then(|v| v.parse().ok())
@@ -174,7 +199,6 @@ pub(crate) fn parse_similarity_section(body: &str) -> Result<Vec<SimilarityRule>
                 .unwrap_or_else(|| "sbert".into()),
         });
     }
-
     Ok(rules)
 }
 
@@ -185,20 +209,15 @@ pub(crate) fn parse_phash_section(body: &str) -> Result<Vec<PHashRule>, SyaraErr
         None => return Ok(rules),
     };
 
-    for line in content.lines() {
+    for (idx, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let cap = match SECTION_LINE_RE.captures(line) {
-            Some(c) => c,
+        let (identifier, file_path, params) = match parse_quoted_section_line(line, idx + 1)? {
+            Some(parts) => parts,
             None => continue,
         };
-
-        let identifier = cap[1].to_owned();
-        let file_path = cap[2].to_owned();
-        let params = parse_kv_params(&cap[3]);
-
         let threshold: f64 = params
             .get("threshold")
             .and_then(|v| v.parse().ok())
@@ -214,7 +233,6 @@ pub(crate) fn parse_phash_section(body: &str) -> Result<Vec<PHashRule>, SyaraErr
                 .unwrap_or_else(|| "imagehash".into()),
         });
     }
-
     Ok(rules)
 }
 
@@ -225,20 +243,15 @@ pub(crate) fn parse_classifier_section(body: &str) -> Result<Vec<ClassifierRule>
         None => return Ok(rules),
     };
 
-    for line in content.lines() {
+    for (idx, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let cap = match SECTION_LINE_RE.captures(line) {
-            Some(c) => c,
+        let (identifier, pattern, params) = match parse_quoted_section_line(line, idx + 1)? {
+            Some(parts) => parts,
             None => continue,
         };
-
-        let identifier = cap[1].to_owned();
-        let pattern = cap[2].to_owned();
-        let params = parse_kv_params(&cap[3]);
-
         let threshold: f64 = params
             .get("threshold")
             .and_then(|v| v.parse().ok())
@@ -262,10 +275,13 @@ pub(crate) fn parse_classifier_section(body: &str) -> Result<Vec<ClassifierRule>
                 .unwrap_or_else(|| "tuned-sbert".into()),
         });
     }
-
     Ok(rules)
 }
 
+/// LLM section is the only place that accepts triple-quoted patterns
+/// (matching the Python reference). Triple-quoted bodies may span
+/// multiple lines, so the parser scans the entire section as a single
+/// stream rather than line-by-line.
 pub(crate) fn parse_llm_section(body: &str) -> Result<Vec<LLMRule>, SyaraError> {
     let mut rules = Vec::new();
     let content = match section_content(body, "llm", &["condition"]) {
@@ -273,19 +289,41 @@ pub(crate) fn parse_llm_section(body: &str) -> Result<Vec<LLMRule>, SyaraError> 
         None => return Ok(rules),
     };
 
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+    let mut s = Scanner::new(content, 1);
+    loop {
+        skip_ws_and_newlines(&mut s);
+        if s.at_end() {
+            break;
+        }
+        if s.peek_byte() != Some(b'$') {
+            // Skip non-rule lines (stray comments, etc.) — bump to next newline.
+            while let Some(b) = s.peek_byte() {
+                s.bump();
+                if b == b'\n' {
+                    break;
+                }
+            }
             continue;
         }
-        let cap = match SECTION_LINE_RE.captures(line) {
-            Some(c) => c,
-            None => continue,
+
+        let line_at_start = s.line();
+        let identifier = s.consume_identifier()?;
+        s.eat_inline_ws();
+        s.expect_byte(b'=')?;
+        s.eat_inline_ws();
+
+        let pattern = match s.peek_byte() {
+            Some(b'"') if s.peek_str(3) == "\"\"\"" => s.consume_triple_quoted_string()?,
+            Some(b'"') => s.consume_quoted_string()?,
+            _ => {
+                return Err(SyaraError::ParseError {
+                    line: line_at_start,
+                    message: "expected quoted pattern after `=` in llm rule".into(),
+                });
+            }
         };
 
-        let identifier = cap[1].to_owned();
-        let pattern = cap[2].to_owned();
-        let params = parse_kv_params(&cap[3]);
+        let params = collect_kv_params_until_newline(&mut s);
 
         rules.push(LLMRule {
             identifier,
@@ -304,7 +342,6 @@ pub(crate) fn parse_llm_section(body: &str) -> Result<Vec<LLMRule>, SyaraError> 
                 .unwrap_or_else(|| "no_chunking".into()),
         });
     }
-
     Ok(rules)
 }
 
@@ -316,54 +353,104 @@ pub(crate) fn parse_condition_section(body: &str) -> String {
     content.trim().to_owned()
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// ── Shared helpers ──────────────────────────────────────────────────────────
 
-/// Process escape sequences in a parsed string literal.
-pub(super) fn unescape_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('"') => out.push('"'),
-                Some('\\') => out.push('\\'),
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some('r') => out.push('\r'),
-                Some(other) => {
-                    out.push('\\');
-                    out.push(other);
+/// `(identifier, pattern, kv params)` triple for a parsed
+/// `$id = "..." key=value ...` line.
+type SectionLineParts = (String, String, HashMap<String, String>);
+
+/// Parse one of the standard `$id = "pattern" key=value ...` section
+/// lines (similarity, phash, classifier — all of which require a
+/// quoted string body, not a regex literal). Returns `None` for lines
+/// that don't match the expected shape so callers can skip silently
+/// (preserving the prior tolerant behavior of `SECTION_LINE_RE`).
+fn parse_quoted_section_line(
+    line: &str,
+    line_no: usize,
+) -> Result<Option<SectionLineParts>, SyaraError> {
+    let mut s = Scanner::new(line, line_no);
+    let identifier = match s.consume_identifier() {
+        Ok(id) if id.starts_with('$') => id,
+        _ => return Ok(None),
+    };
+    s.eat_inline_ws();
+    if s.expect_byte(b'=').is_err() {
+        return Ok(None);
+    }
+    s.eat_inline_ws();
+    if s.peek_byte() != Some(b'"') {
+        return Ok(None);
+    }
+    let pattern = s.consume_quoted_string()?;
+    let params = collect_kv_params_until_newline(&mut s);
+    Ok(Some((identifier, pattern, params)))
+}
+
+/// Read modifier words (alphanumeric tokens) from the current scanner
+/// position to end-of-input/newline. Used by `parse_strings_section`.
+fn collect_modifiers(s: &mut Scanner<'_>) -> Vec<Modifier> {
+    let mut out = Vec::new();
+    loop {
+        s.eat_inline_ws();
+        match s.peek_byte() {
+            None | Some(b'\n') => break,
+            _ => {}
+        }
+        match s.consume_modifier_word() {
+            Some(word) => {
+                if let Some(m) = Modifier::from_str(&word) {
+                    out.push(m);
                 }
-                None => out.push('\\'),
             }
-        } else {
-            out.push(c);
+            None => break,
         }
     }
     out
 }
 
-fn parse_string_modifiers(s: &str) -> Vec<Modifier> {
-    s.split_whitespace()
-        .filter_map(|tok| {
-            let tok = tok.trim_end_matches(|c: char| !c.is_alphanumeric());
-            Modifier::from_str(tok)
-        })
-        .collect()
+/// Read `key=value` and `key="value"` pairs from the current scanner
+/// position to end-of-input/newline. Bareword keys without `=value`
+/// are silently dropped (matches prior Rust behavior; bareword flags
+/// are handled by `collect_modifiers` for the strings section).
+fn collect_kv_params_until_newline(s: &mut Scanner<'_>) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+    loop {
+        s.eat_inline_ws();
+        match s.peek_byte() {
+            None | Some(b'\n') => break,
+            _ => {}
+        }
+        let key = match s.consume_modifier_word() {
+            Some(k) => k,
+            None => {
+                // Unrecognized lead char — bump until next ws to avoid
+                // an infinite loop on malformed input.
+                while let Some(b) = s.peek_byte() {
+                    if b.is_ascii_whitespace() {
+                        break;
+                    }
+                    s.bump();
+                }
+                continue;
+            }
+        };
+        if s.peek_byte() == Some(b'=') {
+            s.bump();
+            if let Ok(value) = s.consume_kv_value() {
+                params.insert(key, value);
+            }
+        }
+        // Bareword key (no `=`): drop silently.
+    }
+    params
 }
 
-/// Parse `key=value` and `key="value"` pairs from a parameter string.
-fn parse_kv_params(s: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for cap in KV_PARAMS_RE.captures_iter(s) {
-        let key = cap[1].to_owned();
-        let val = cap
-            .get(2)
-            .map(|m| m.as_str())
-            .or_else(|| cap.get(3).map(|m| m.as_str()))
-            .unwrap_or("")
-            .to_owned();
-        map.insert(key, val);
+fn skip_ws_and_newlines(s: &mut Scanner<'_>) {
+    while let Some(b) = s.peek_byte() {
+        if b.is_ascii_whitespace() {
+            s.bump();
+        } else {
+            break;
+        }
     }
-    map
 }

@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Until `1.0.0`, minor-version bumps may include breaking changes to the DSL or
 public API.
 
+## [0.4.0] — 2026-05-10
+
+### BREAKING CHANGES
+
+- **Rules using `\/` in regex literals or `\"` in meta values / kv
+  parameter values now parse correctly.** Pre-fix, the `.syara` parser's
+  per-line regex tokenizers (`REGEX_PATTERN_RE`, `META_KV_RE`,
+  `KV_PARAMS_RE`) used unescape-unaware body captures (`[^/]*`,
+  `[^"]*`) that truncated at the first delimiter byte regardless of
+  any preceding backslash. Affected rules silently miscompiled to a
+  truncated body that either failed to compile or compiled to a
+  pattern that never matched real input — and the failure was hidden
+  by a silent error swallow at scan time (BUG-040). After this fix,
+  these rules compile to the intended body and match real content.
+  **Consumers should re-baseline match expectations** — particularly
+  any test fixtures that asserted `!matched` for a rule containing
+  `\/` or `\"` in a delimited body. Nine patterns across three files
+  in the `llm_context_shield` consumer corpus were repaired.
+- **Malformed regex patterns now error at `compile_str` time, not
+  silently at scan time** (BUG-040). A rule containing e.g. `/[/`
+  used to compile successfully and return zero matches forever; it
+  now returns `Err(SyaraError::InvalidPattern { ... })` from
+  `compile_str` / `compile_file`. Public API surface unchanged
+  (`scan` still returns `Vec<Match>`).
+- **Unknown regex flag letters now error** rather than being
+  silently dropped (e.g. `/abc/sm` previously parsed as flags `i?`
+  and dropped `s` and `m`; now errors with
+  `unsupported regex flag '...' (only 'i' is recognized)`).
+
+### Fixed
+
+- **BUG-039 — `\/` truncation in regex bodies.** Reported by the
+  `llm_context_shield` consumer (Phase 13.5b, 2026-05-09): the regex
+  `<\/?(system|user|assistant)[\s>]` did not match `<system>`
+  despite YARA-X parity. Root cause: the per-line parser regex
+  `REGEX_PATTERN_RE = (\$\w+)\s*=\s*/([^/]*)/(i?)\s*(.*)` truncated
+  the body at the first `/` byte. Fixed by replacing the five
+  `LazyLock<Regex>` per-line tokenizers in `parser/sections.rs` with
+  a hand-rolled `Scanner` (`syara/src/parser/scanner.rs`) that
+  mirrors the existing top-level state-machine idiom in
+  `parser/mod.rs::split_rules`. Bug class also repaired in meta
+  values and kv parameters (latent — no consumer rule had triggered
+  it yet). See `tasks/05-10-2026_BUGS.md` for the full close-out.
+- **BUG-040 — silent regex-compile error swallow.** The string-pattern
+  scan loop in `compiled_rules.rs::execute_rule` had a `_ => {}` arm
+  that absorbed both `Ok(empty)` and `Err(InvalidPattern)` from
+  `StringMatcher::match_rule`. This is what hid BUG-039 end-to-end.
+  Fixed by adding `StringMatcher::validate(rule)` which is called
+  from `Compiler::validate_and_compile` to surface regex compile
+  errors at `compile_str` time. The scan-site `_ => {}` was
+  tightened to `Ok(_) => {}` + `debug_assert!` on `Err`.
+
+### Added
+
+- **Triple-quoted patterns (`"""..."""`) for `llm:` rules**, matching
+  the Python reference parser. Triple-quoted bodies may span multiple
+  lines and contain unescaped `"`, `{`, `}` — useful for prompt
+  templates passed to LLM evaluators. Wired through three layers:
+  `parser/scanner.rs::Scanner::consume_triple_quoted_string`,
+  `parser/mod.rs::remove_comments` (TripleString mode), and
+  `parser/mod.rs::split_rules` (3-byte lookahead in the brace
+  counter).
+- **`syara/src/parser/scanner.rs`** — hand-rolled per-line tokenizer.
+  Single file (~360 lines) with byte-indexed cursor, line tracking
+  for parse errors (BUG-023 spirit), and 20 unit tests including a
+  parity test against `parser/mod.rs::split_rules`'s regex
+  consumption. Methods: `consume_identifier`,
+  `consume_quoted_string`, `consume_triple_quoted_string`,
+  `consume_regex_literal`, `consume_modifier_word`,
+  `consume_kv_value`.
+
+### Changed
+
+- **Parser internals: per-line regex tokenizers replaced with a
+  hand-rolled scanner.** This is an intentional divergence from the
+  Python reference (`../syara-rust-port/syara/parser.py`) which has
+  the same bug class and produces silent miscompilation under the
+  same inputs. CLAUDE.md's porting-discipline waiver applies — the
+  divergence is documented in the scanner module doc-comment.
+- **`parser/sections.rs`** restructured: deleted five
+  `LazyLock<Regex>` constants; each section parser now drives a
+  `Scanner`. Added `parse_quoted_section_line` shared helper for
+  similarity / phash / classifier sections. The LLM section is
+  parsed as a single stream (rather than line-by-line) to support
+  multi-line triple-quoted bodies.
+
 ## [0.3.1] — 2026-04-24
 
 ### Fixed

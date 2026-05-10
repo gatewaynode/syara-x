@@ -3,6 +3,7 @@
 /// Uses a brace-counting approach (same as the Python implementation) that
 /// correctly handles `{n,m}` regex quantifiers inside string literals and
 /// regex literals without a full grammar.
+mod scanner;
 mod sections;
 
 use std::path::Path;
@@ -70,6 +71,7 @@ fn remove_comments(input: &str) -> String {
     enum Mode {
         Normal,
         String,
+        TripleString,
         Regex,
     }
     let mut mode = Mode::Normal;
@@ -78,7 +80,11 @@ fn remove_comments(input: &str) -> String {
         let c = chars[i];
         match mode {
             Mode::Normal => {
-                if c == '"' {
+                if c == '"' && i + 2 < n && chars[i + 1] == '"' && chars[i + 2] == '"' {
+                    out.push_str("\"\"\"");
+                    mode = Mode::TripleString;
+                    i += 3;
+                } else if c == '"' {
                     out.push(c);
                     mode = Mode::String;
                     i += 1;
@@ -122,6 +128,18 @@ fn remove_comments(input: &str) -> String {
                     mode = Mode::Normal;
                     i += 1;
                 } else {
+                    i += 1;
+                }
+            }
+            Mode::TripleString => {
+                // Body captured raw (no escape processing — matches the
+                // Python reference). Closes only on `"""`.
+                if c == '"' && i + 2 < n && chars[i + 1] == '"' && chars[i + 2] == '"' {
+                    out.push_str("\"\"\"");
+                    mode = Mode::Normal;
+                    i += 3;
+                } else {
+                    out.push(c);
                     i += 1;
                 }
             }
@@ -172,6 +190,23 @@ fn split_rules(content: &str) -> Vec<String> {
                     j += 2;
                 }
                 b'"' => {
+                    // Triple-quoted: consume `"""..."""` as a single
+                    // token; inner single `"` and braces are content.
+                    if j + 2 < n && bytes[j + 1] == b'"' && bytes[j + 2] == b'"' {
+                        j += 3;
+                        while j < n {
+                            if j + 2 < n
+                                && bytes[j] == b'"'
+                                && bytes[j + 1] == b'"'
+                                && bytes[j + 2] == b'"'
+                            {
+                                j += 3;
+                                break;
+                            }
+                            j += 1;
+                        }
+                        continue;
+                    }
                     j += 1;
                     while j < n {
                         if bytes[j] == b'\\' {
@@ -301,7 +336,7 @@ fn parse_rule_block(block: &str) -> Result<Rule, SyaraError> {
 mod tests {
     use super::*;
     use crate::models::Modifier;
-    use sections::unescape_string;
+    use scanner::unescape_string;
 
     #[test]
     fn test_parse_basic_rule() {
@@ -558,5 +593,124 @@ mod tests {
         assert_eq!(unescape_string(r#"a\\b"#), "a\\b");
         assert_eq!(unescape_string(r#"line\none"#), "line\none");
         assert_eq!(unescape_string(r#"tab\there"#), "tab\there");
+    }
+
+    // ── Triple-quoted LLM patterns (Python parity) ─────────────────────
+
+    #[test]
+    fn test_triple_quoted_llm_pattern_with_braces_and_quotes() {
+        let src = r#"
+        rule llm_triple {
+            llm:
+                $p1 = """Detect intent: classify {input} as "harmful" or "benign"."""
+            condition:
+                $p1
+        }
+        "#;
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].llm.len(), 1);
+        assert_eq!(
+            rules[0].llm[0].pattern,
+            r#"Detect intent: classify {input} as "harmful" or "benign"."#
+        );
+    }
+
+    #[test]
+    fn test_triple_quoted_llm_pattern_multiline() {
+        let src = "
+        rule llm_multi {
+            llm:
+                $p1 = \"\"\"first line
+second line
+third line\"\"\"
+            condition:
+                $p1
+        }
+        ";
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules[0].llm[0].pattern, "first line\nsecond line\nthird line");
+    }
+
+    /// Comment stripper must NOT interpret `//` inside a triple-quoted body.
+    #[test]
+    fn test_comment_stripper_preserves_triple_quote_body() {
+        let src = r#"
+        rule llm_with_comment_chars {
+            llm:
+                $p1 = """visit https://example.com or //inline"""
+            condition:
+                $p1
+        }
+        "#;
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(
+            rules[0].llm[0].pattern,
+            "visit https://example.com or //inline"
+        );
+    }
+
+    // ── Latent escape bugs the BUG-039 fix repaired ────────────────────
+
+    /// Pre-fix, `META_KV_RE = (\w+)\s*=\s*"([^"]*)"` truncated meta
+    /// values at the first `"` byte regardless of escape. After the
+    /// scanner refactor, `\"` is honored.
+    #[test]
+    fn test_meta_value_with_escaped_quote() {
+        let src = r#"
+        rule meta_escape {
+            meta:
+                description = "say \"hi\""
+            strings:
+                $s = "anything"
+            condition:
+                $s
+        }
+        "#;
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(
+            rules[0].meta.get("description").map(String::as_str),
+            Some(r#"say "hi""#)
+        );
+    }
+
+    /// Pre-fix, `KV_PARAMS_RE`'s quoted-value branch `"([^"]*)"`
+    /// truncated kv values at the first `"` byte. After the scanner
+    /// refactor, `\"` is honored.
+    #[test]
+    fn test_kv_param_with_escaped_quote() {
+        let src = r#"
+        rule kv_escape {
+            similarity:
+                $s = "phrase" cleaner="say \"hi\"" threshold=0.5
+            condition:
+                $s
+        }
+        "#;
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules[0].similarity[0].cleaner_name, r#"say "hi""#);
+    }
+
+    /// BUG-039 diagnostic: what does the parser actually capture for a
+    /// regex literal containing an escaped forward slash?
+    #[test]
+    fn test_bug039_regex_with_escaped_slash_capture() {
+        let src = r#"
+        rule r {
+            strings:
+                $r = /<\/?(system|user|assistant)[\s>]/
+            condition:
+                $r
+        }
+        "#;
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        let pat = &rules[0].strings[0].pattern;
+        eprintln!("BUG-039 captured pattern = {pat:?}");
+        // Pin the *expected* shape: the parser must preserve the full regex body.
+        assert_eq!(
+            pat,
+            r"<\/?(system|user|assistant)[\s>]",
+            "parser truncated the regex body"
+        );
     }
 }

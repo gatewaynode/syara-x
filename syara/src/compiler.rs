@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::compiled_rules::CompiledRules;
 use crate::config::Registry;
 use crate::condition;
+use crate::engine::string_matcher::StringMatcher;
 use crate::error::SyaraError;
 use crate::models::Rule;
 
@@ -28,6 +29,9 @@ impl Compiler {
                     rule.name.clone(),
                 ));
             }
+            // BUG-040: eagerly validate that the regex compiles so
+            // malformed patterns surface here, not silently at scan time.
+            StringMatcher::validate(r)?;
         }
         for r in &rule.similarity {
             if !declared.insert(r.identifier.clone()) {

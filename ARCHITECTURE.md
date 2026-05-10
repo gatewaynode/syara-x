@@ -43,15 +43,17 @@ Vec<Match>                        # Option<usize> positions
 
 ## Module Design
 
-### Parser (`parser.rs`)
-- **Regexes**: All patterns compiled once via `LazyLock` at module level.
-- **String handling**: Work with byte offsets on `&str`, no `Vec<char>` intermediaries.
-- **Escaped quotes**: Support `\"` inside string literals.
-- **Error reporting**: Track line numbers through parsing; attach to all errors.
+### Parser (`parser/`)
+- **Layered tokenization**: top-level brace-counter and comment-stripper in `parser/mod.rs`; per-line tokenizer in `parser/scanner.rs`. The three state machines must agree on what counts as "inside a regex / string / triple-quoted literal" — pinned by the parity test in `parser/scanner.rs::tests::parity_with_split_rules_regex_consumption`.
+- **No regex-over-line tokenization**: section line parsing goes through `Scanner` (escape-aware) rather than `LazyLock<Regex>` body captures (escape-blind). See BUG-039 close-out for what the latter cost us. If you find yourself reaching for `[^X]*` over a body that may contain `\X`, stop and lex.
+- **String handling**: Byte-indexed cursor; UTF-8 char-boundary checks before slicing.
+- **Escapes**: `\"`, `\\`, `\n`, `\t`, `\r` in quoted strings; `\/` (and any `\X`) preserved in regex bodies; triple-quoted (`"""..."""`) bodies captured raw.
+- **Error reporting**: Per-line `line` field tracked through parsing; attached to `SyaraError::ParseError`.
 - **Missing sections**: Explicit error for missing `condition:`, not silent empty string.
 
 ### Compiler (`compiler.rs`)
 - **Single-pass validation**: Check identifiers, resolve wildcards, validate modifiers.
+- **Eager regex compile**: Each `StringRule` is validate-compiled at `compile_str` time via `StringMatcher::validate` so malformed patterns surface as `SyaraError::InvalidPattern` here, not silently at scan time (BUG-040).
 - **AST storage**: Parse condition into `Expr` and store it in `CompiledRules` — never re-parsed.
 - **Modifier validation**: Verify all modifiers are actually implemented before accepting them.
 
@@ -126,6 +128,7 @@ Backend selected via `Registry` configuration. Both implement the same trait. HT
 ## File Size Budget
 
 Target: every `.rs` file under 500 lines. Current violations:
-- `parser.rs` — 774 lines (split section parsers into submodule or use macro)
+- `parser/mod.rs` — 716 lines (large in-module test suite; non-test impl is ~280 lines)
+- `parser/scanner.rs` — 538 lines (large in-module test suite; non-test impl is ~310 lines)
 - `condition.rs` — 456 lines (acceptable, but monitor)
 - `capi/src/lib.rs` — 439 lines (acceptable)
