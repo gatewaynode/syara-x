@@ -5,139 +5,181 @@ before any compact. Wipe stale entries when work concludes.
 
 ---
 
-## Active session — 2026-05-10
+## Active session — 2026-05-10 (lexer polish pass)
 
-### What we just finished
+### Where we are
 
-**v0.4.0 implementation (BUG-039 + BUG-040 fix)** — all 6 phases of plan
-`/Users/john/.claude/plans/shimmering-beaming-hennessy.md` complete.
-Code lives in 8 modified files (uncommitted). Tests green: 154 default,
-271 with `--all-features`, clippy clean, `cargo publish --dry-run -p
-syara-x --allow-dirty` passes.
+v0.4.0 (BUG-039 + BUG-040 + new scanner module) shipped earlier this
+session and is committed. Current work is the **polish pass** against
+the rough-edges list in `docs/lexer-data-flow.md` (section: "First-pass
+rough edges (v0.4.0 — flagged for follow-up polish)").
 
-### Current state — UNCOMMITTED
+Three rough-edges resolved this session, each as its own commit-sized
+batch:
 
-`git status` shows 8 modified files + 2 new files + several new test
-fixtures. Nothing is staged. **The user has NOT asked for a commit
-yet.** Do not commit unless asked.
+1. **Missing parity tests** — added scanner ↔ split_rules mirrors for
+   string + triple-quote (the regex one already existed); added
+   behavioral parity tests for `remove_comments` (regex / string /
+   triple-quote bodies preserve comment-like sequences) and
+   `split_rules` brace counter (`{` / `}` inside literals don't
+   decrement depth). +8 tests. **Committed.**
+2. **`ParseError` carried line but not col** — added `col: usize` to
+   `SyaraError::ParseError`, with `Display` suffix that hides the 0
+   sentinel (used by error sites without a Scanner in scope, e.g.
+   rule-header / missing-condition errors in `parse_rule_block`).
+   `Scanner::col()` derives column from `pos` via `rfind('\n')` on the
+   byte slice — works uniformly for per-line and stream usage. +5
+   tests. **Committed.**
+3. **`eat_inline_ws` ignored `\r` (CRLF files)** — added `b == b'\r'`
+   to the consume condition. Verified end-to-end CRLF parsing for
+   per-line sections, modifiers / kv params, LLM stream section, and
+   triple-quoted bodies (CRLF inside body preserved raw, matching
+   Python "raw body" parity). +5 tests. **About to commit.**
+
+Test counts after the CRLF batch: **136 lib + 35 integration + 1 doc**
+(default features). Lib clippy clean. Three pre-existing clippy
+warnings in non-touched files (string_matcher.rs:406, models.rs:203,
+integration.rs:2) — confirmed unrelated via `git blame`.
+
+### Current uncommitted state — CRLF batch only
 
 ```
-modified:  Cargo.toml                                    # 0.3.1 → 0.4.0
-modified:  CHANGELOG.md                                  # [0.4.0] entry
-modified:  ARCHITECTURE.md                               # parser section
-modified:  syara/src/compiled_rules.rs                   # silent swallow → debug_assert
-modified:  syara/src/compiler.rs                         # StringMatcher::validate hook
-modified:  syara/src/engine/string_matcher.rs            # new validate()
-modified:  syara/src/parser/mod.rs                       # triple-quote + 5 tests
-modified:  syara/src/parser/sections.rs                  # rewritten — scanner-driven
-modified:  syara/tests/integration.rs                    # BUG-039 + BUG-040 + corpus
-modified:  tasks/BUGS.md                                 # cleared open list
-modified:  tasks/lessons.md                              # [^X]* lesson
-new file:  syara/src/parser/scanner.rs                   # the new lexer
-new file:  tasks/05-10-2026_BUGS.md                      # close-out archive
-new file:  tasks/CONTINUITY.md                           # this file
+modified:  docs/lexer-data-flow.md       # removed the resolved CRLF rough-edge entry
+modified:  syara/src/parser/mod.rs       # 5 CRLF end-to-end tests
+modified:  syara/src/parser/scanner.rs   # eat_inline_ws + 1 unit test
 ```
+
+User said "I'll commit" — do NOT auto-commit.
 
 ### Likely next steps after compact
 
-1. **User reviews diff and asks for a commit.** Use a single
-   focused commit (per project convention) referencing BUG-039 +
-   BUG-040 + v0.4.0. Co-author tag with the model id (see CLAUDE.md
-   git protocol). Don't auto-commit.
-2. **Possibly tag + publish v0.4.0 to crates.io.** Sequence: commit
-   first → `git tag v0.4.0` → `cargo publish -p syara-x` →
-   `cargo publish -p syara-x-capi`. Requires user authorization for
-   the publish step (it's a one-way action).
-3. **Downstream consumer follow-up** — `llm_context_shield` has a
-   workaround in its Phase 13.5b SESSION_PROTOCOL_COMBINED test
-   fixture (Cyrillic homoglyph priming) that can be dropped once
-   v0.4.0 is consumed. Tracked in `llm_context_shield/tasks/RULE_FIXES.md`.
-   Don't touch that repo from here without explicit ask.
+User wants to **keep polishing the lexer flow**. The dataflow doc's
+rough-edges section is the work queue. Remaining items, ordered roughly
+by impact:
 
-### Critical gotchas if you have to pick this up cold
+**Bug-risk tier** (do these first):
 
-- **The scanner is `pub(crate)`**, not `pub`. Don't accidentally
-  expose it. Same for `parser` module (`pub(crate) mod parser` in
-  `syara/src/lib.rs`).
-- **Triple-quote support is LLM-section only.** Other sections
-  reject `"""` (Python parity). If the user later asks "why doesn't
-  triple-quote work in `strings:`?", explain the parity choice.
-  Wiring it elsewhere requires updating the brace counter and
-  comment stripper as well.
-- **`compiled_rules.rs:113-128` now has `debug_assert!(false, ...)`
-  in the Err arm.** Release builds silently ignore the error. If
-  any future test ever fails with "scanner errored at scan time
-  despite eager validate()", a regex evades the eager path —
-  investigate the new evasion route, don't relax the assert.
-- **The cross-engine YARA-X parity test the plan agent suggested
-  was NOT added** to syara-x's test suite. The 4 consumer-corpus
-  shape tests in `tests/integration.rs::test_bug039_corpus_*`
-  cover the same patterns positively, which is what matters for
-  this fix. If user later asks about full YARA-X parity, that's a
-  separate bigger effort.
-- **The Python reference parser has the SAME bug class** and was
-  intentionally diverged from. Documented in `scanner.rs` module
-  doc-comment per CLAUDE.md porting-discipline waiver. Don't "fix"
-  the divergence back during a future porting pass.
+- **`parse_llm_section` skip-non-rule-line is over-tolerant**
+  (`sections.rs:280-291`). Typo `pp1 = "..."` (missing `$`) silently
+  skips the whole rule. Decide whether to error or warn.
+- **Brace-counter `b'/'` arm requires `=` immediately before**
+  (`mod.rs:213-220`). Thin invariant — adding any new operator near
+  `/` would silently break this. Could be hardened with a comment,
+  an assertion, or refactored to be more robust.
+- **Flag-rejection is BREAKING without migration story** — `/abc/sm`
+  errors hard. CHANGELOG calls it out under v0.4.0 BREAKING but the
+  migration ("use inline flags `(?s)`, `(?m)`") is only mentioned in
+  the v0.3.0 entry. Add migration note to v0.4.0 BREAKING section.
 
-### Out-of-scope follow-ups (file as new bugs if/when needed)
+**Design tier**:
 
-From the plan's "Out-of-scope follow-ups" section:
+- **Asymmetric line tracking across `consume_*` methods** — only
+  `consume_triple_quoted_string` and `bump()` track `\n`.
+  `consume_quoted_string` and `consume_regex_literal` don't. Latent
+  for the LLM-stream parser if anyone embeds a literal `\n` in a
+  single-quoted body. Quick fix: have the consume methods bump
+  through `bump()` instead of raw `pos += 1` for the byte-by-byte
+  loop. Touches 4 methods.
+- **`idx + 1` is section-relative line number** — error messages
+  report "line 3" meaning "line 3 of the strings: section," not
+  the source-file line. Real fix needs the section parsers to track
+  absolute line numbers (compute the section start line in
+  `section_content`, pass it down to per-line scanner constructors).
+  Bigger change — touches `section_content` signature.
+- **Three state machines** — structural design issue (test
+  scaffolding is now complete via parity tests). Consolidating into
+  a single shared lexer crate-internal helper is the eventual end
+  state. Bigger refactor; defer.
+- **`unescape_string` duplicates `consume_quoted_string`'s escape
+  table** — one is `#[cfg(test)]` only, used by one test in
+  `parser/mod.rs::tests::test_unescape_string_sequences`. Either
+  delete and rewrite the test against `Scanner::consume_quoted_string`,
+  or add a parity test. Quick.
 
-- **Consolidate the three state machines** (scanner, brace counter,
-  comment stripper) onto a single shared lexer crate-internal
-  helper. The parity unit test pins their behavioral agreement;
-  deduplication is a future cleanup. Not urgent.
-- **Triple-quote in non-LLM sections.** Python doesn't support it
-  there either; user opted for parity. If a future user wants a
-  multi-line quoted string in `strings:` or `meta:`, this is the
-  ticket.
-- **YARA-X cross-engine parity test corpus** — see plan agent's
-  P-A recommendation. Cheap if done from `llm_context_shield` side
-  rather than vendoring rules into syara-x.
+**Hygiene tier**:
+
+- **`consume_kv_value` accepts any non-ws bareword** —
+  `cleaner=ñ$@%` parses cleanly. Add positive-shape validation if
+  desired.
+- **Empty regex body permitted (`//`)** — downstream `Regex::new("")`
+  matches everywhere. Decide whether to reject at parse or accept.
+- **`parse_quoted_section_line` over-tolerant skip** — silent
+  `Ok(None)` for any non-`$id =` line. Add "looks-like-attempted-rule"
+  warning.
+- **Duplicated section-end keyword lists** in
+  `sections.rs:73, 109, 161, 199, 232, 269` — extract a `const
+  SECTION_ORDER`. Easy win.
+
+When picking next batch, propose 1-3 related items (e.g., "the
+bug-risk tier" or "the quick wins") and let the user choose. Don't
+attempt the entire list as one mega-PR.
+
+### Critical gotchas if you pick this up cold
+
+- **The polish pass is iterative — one batch per commit.** User has
+  been committing between batches. Do NOT bundle multiple rough-edges
+  into a single PR without explicit ask.
+- **Parity tests pin the three-state-machine invariant.** Before
+  refactoring any of `Scanner` / `remove_comments` / `split_rules`,
+  run `cargo test -p syara-x --lib parser::scanner::tests::parity`
+  and `cargo test -p syara-x --lib parser::tests::test_split_rules`
+  to confirm baseline. Any state-machine change MUST keep these
+  green.
+- **`ParseError` shape changed this session** — `{ line, col,
+  message }` not `{ line, message }`. If you ever see code that
+  matches on the old 2-field shape, it's stale.
+- **Pre-existing clippy warnings are NOT mine.** Run `cargo clippy
+  -p syara-x --lib` to filter to only the touched-file warnings.
+  Don't fix the pre-existing ones unless explicitly asked.
+- **Per-line section parsers iterate `content.lines()`** which
+  strips both `\n` and `\r\n` line terminators. The CRLF fix matters
+  for the LLM-section stream parser (which uses a single Scanner
+  across newlines) and for any `\r` that sneaks into per-line input
+  via `trim()` edge cases.
+- **`Scanner::col()` is byte-indexed, not char-indexed.** Safe for
+  ASCII inputs (which `.syara` files are in practice). Multi-byte
+  UTF-8 inside a literal would give a slightly off col number — flag
+  if the user ever brings non-ASCII rule files.
 
 ### Test-count verification (sanity check on resume)
 
-Run these to confirm nothing has regressed since the work was
-completed:
-
 ```bash
 cargo test -p syara-x 2>&1 | grep "test result:"
-# Expect:
-#   ok. 118 passed; 0 failed; 0 ignored      (lib)
-#   ok. 35 passed; 0 failed; 0 ignored       (integration)
-#   ok. 1 passed; 0 failed; 0 ignored        (doc)
+# Expect (after the CRLF batch is committed):
+#   ok. 136 passed; 0 failed; 0 ignored      (lib)
+#   ok. 35 passed                            (integration)
+#   ok. 1 passed                             (doc)
 #   plus 3 empty test files
 
-cargo test -p syara-x --all-features 2>&1 | grep "test result:"
-# Expect:
-#   ok. 226 passed; 0 failed; 6 ignored      (lib)
-#   ok. 35 passed                            (integration)
-#   plus 5 feature-gated test files
+cargo clippy -p syara-x --lib -- -D warnings  # should be clean
 ```
 
-If counts diverge, something else has changed since I last checked.
+If lib counts diverge, something else has changed since I last
+checked. Each polish batch typically adds ~5 tests; if the count is
+off by more than that, look at the most recent commits.
 
-### Plan file
+### Reference docs
 
-The original approved plan is at
-`/Users/john/.claude/plans/shimmering-beaming-hennessy.md` — it
-captures all six phases, user decisions (v0.4.0, BUG-040 in same
-PR, triple-quote implemented), and verification commands. Read it
-first if context is unclear.
+- **`docs/lexer-data-flow.md`** — single source of truth for the
+  rough-edges work queue. Update entries (or remove them) as items
+  ship.
+- **`tasks/05-10-2026_BUGS.md`** — close-out archive for BUG-039 +
+  BUG-040 (the original v0.4.0 work). Don't touch unless reopening.
+- **`/Users/john/.claude/plans/shimmering-beaming-hennessy.md`** —
+  v0.4.0 plan. Historical only.
 
 ---
 
 ## How to use this file going forward
 
 - **Update before any compact.** Capture session-specific state
-  that would be hard to reconstruct from `git status` + the plan
-  file alone: design choices made mid-session, gotchas, what was
-  intentionally out of scope, what the user is likely to ask next.
-- **Keep entries dated.** When work concludes (commit lands,
-  feature ships, ticket closes), wipe the entry. This file is not
-  an archive — `tasks/05-10-2026_BUGS.md` and the dated bug files
-  serve that role. Stale continuity entries are worse than none.
-- **Mirror, don't duplicate.** If something belongs in
-  `tasks/lessons.md` (a generalizable rule), put it there and link
-  to it. This file is for in-flight context only.
+  that would be hard to reconstruct from `git status` + the dataflow
+  doc alone: what was just committed, what's queued, design choices
+  that informed the current direction.
+- **Wipe entries when work concludes.** When the polish pass wraps
+  (or transitions to the next major effort), this whole entry goes.
+  Stale continuity entries are worse than none.
+- **Mirror, don't duplicate.** Generalizable lessons go in
+  `tasks/lessons.md`. Rough-edge tracking lives in
+  `docs/lexer-data-flow.md`. This file is for in-flight session
+  context only.

@@ -91,12 +91,21 @@ impl<'a> Scanner<'a> {
         &self.src[self.pos..end]
     }
 
-    /// Skip ASCII space/tab. Newlines are NOT consumed — callers
-    /// control newline boundaries (line-oriented section parsers stop
-    /// at `\n`; the triple-quote scanner spans newlines).
+    /// Skip ASCII inline whitespace: space, tab, and carriage return.
+    /// Newlines (`\n`) are NOT consumed — callers control newline
+    /// boundaries (line-oriented section parsers stop at `\n`; the
+    /// triple-quote scanner spans newlines).
+    ///
+    /// `\r` is treated as inline whitespace so CRLF source files
+    /// don't leave a stray `\r` between a token and its terminating
+    /// `\n`. Without this, `collect_modifiers` /
+    /// `collect_kv_params_until_newline` would still terminate (via
+    /// `consume_modifier_word` returning `None` on non-alphanumeric),
+    /// but only by accident — making the inline-whitespace contract
+    /// uniform here is the cleaner fix.
     pub(crate) fn eat_inline_ws(&mut self) {
         while let Some(b) = self.peek_byte() {
-            if b == b' ' || b == b'\t' {
+            if b == b' ' || b == b'\t' || b == b'\r' {
                 self.pos += 1;
             } else {
                 break;
@@ -533,6 +542,24 @@ mod tests {
             msg.contains("col 4"),
             "expected col in error message, got: {msg}"
         );
+    }
+
+    /// `eat_inline_ws` consumes `\r` so CRLF source files don't leak
+    /// a stray carriage return into downstream parsers.
+    #[test]
+    fn eat_inline_ws_consumes_carriage_return() {
+        // Mixed inline whitespace including CR before a token.
+        let mut s = scan(" \t\r\rfoo");
+        s.eat_inline_ws();
+        assert_eq!(s.peek_byte(), Some(b'f'));
+
+        // A CR followed by an LF: CR is eaten, LF remains so callers
+        // can detect end-of-line.
+        let mut s = scan("nocase\r\n");
+        // Start past the modifier so we're at `\r`.
+        s.pos = "nocase".len();
+        s.eat_inline_ws();
+        assert_eq!(s.peek_byte(), Some(b'\n'));
     }
 
     #[test]

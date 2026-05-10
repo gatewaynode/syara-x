@@ -893,6 +893,70 @@ third line\"\"\"
         assert!(msg.contains("no condition"), "expected the right error: {msg}");
     }
 
+    // ── CRLF line-ending support ────────────────────────────────────────
+    //
+    // `.syara` files authored on Windows use `\r\n` line terminators.
+    // `eat_inline_ws` now consumes `\r` so the inline-whitespace
+    // contract is uniform across line endings.
+
+    /// Per-line section parsers (meta / strings / similarity / phash /
+    /// classifier) handle CRLF line endings transparently. `lines()`
+    /// already strips `\r\n` and `\n` uniformly, so the per-line
+    /// Scanner sees no `\r`. This test pins the end-to-end behavior.
+    #[test]
+    fn test_parse_crlf_per_line_sections() {
+        let src = "rule crlf_test {\r\n    meta:\r\n        author = \"win\"\r\n    strings:\r\n        $s1 = \"hello\" nocase\r\n    condition:\r\n        $s1\r\n}\r\n";
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name, "crlf_test");
+        assert_eq!(rules[0].meta.get("author"), Some(&"win".to_owned()));
+        assert_eq!(rules[0].strings[0].pattern, "hello");
+        assert!(rules[0].strings[0].modifiers.contains(&Modifier::NoCase));
+    }
+
+    /// Modifier list with CRLF terminator: `nocase\r\n`. Pre-fix,
+    /// `eat_inline_ws` left `\r` in place; `collect_modifiers`
+    /// terminated only because `consume_modifier_word` happened to
+    /// return `None` on the `\r` byte. Fix routes `\r` through
+    /// `eat_inline_ws` so the contract is explicit.
+    #[test]
+    fn test_parse_crlf_modifiers_and_kv_params() {
+        let src = "rule mods_crlf {\r\n    strings:\r\n        $s = \"x\" nocase wide\r\n    similarity:\r\n        $sim = \"phrase\" threshold=0.5 matcher=\"sbert\"\r\n    condition:\r\n        $s or $sim\r\n}\r\n";
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert!(rules[0].strings[0].modifiers.contains(&Modifier::NoCase));
+        assert!(rules[0].strings[0].modifiers.contains(&Modifier::Wide));
+        let sim = &rules[0].similarity[0];
+        assert!((sim.threshold - 0.5).abs() < 1e-9);
+        assert_eq!(sim.matcher_name, "sbert");
+    }
+
+    /// LLM section parses as a single Scanner stream spanning newlines.
+    /// CRLF line endings between rules within the section must be
+    /// consumed cleanly by `skip_ws_and_newlines` (which uses
+    /// `is_ascii_whitespace`, including `\r`) and the kv-param loop
+    /// (which now exits cleanly via the fixed `eat_inline_ws`).
+    #[test]
+    fn test_parse_crlf_llm_stream_section() {
+        let src = "rule llm_crlf {\r\n    llm:\r\n        $p1 = \"first prompt\" llm=\"openai-api-compatible\"\r\n        $p2 = \"second prompt\"\r\n    condition:\r\n        $p1 or $p2\r\n}\r\n";
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules[0].llm.len(), 2);
+        assert_eq!(rules[0].llm[0].pattern, "first prompt");
+        assert_eq!(rules[0].llm[0].llm_name, "openai-api-compatible");
+        assert_eq!(rules[0].llm[1].pattern, "second prompt");
+    }
+
+    /// Triple-quoted bodies in the LLM section preserve CRLF inside
+    /// the body verbatim (matches the "raw body" Python-parity
+    /// contract for triple-quoted strings — we don't normalize line
+    /// endings in user-authored prompt templates).
+    #[test]
+    fn test_parse_crlf_inside_triple_quoted_body_is_preserved() {
+        let src = "rule llm_triple_crlf {\r\n    llm:\r\n        $p1 = \"\"\"line1\r\nline2\r\nline3\"\"\"\r\n    condition:\r\n        $p1\r\n}\r\n";
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules[0].llm[0].pattern, "line1\r\nline2\r\nline3");
+    }
+
     /// `split_rules` two-rule split with brace inside literal: the
     /// inner `}` must not split the first rule prematurely. If
     /// split_rules' string arm disagreed with the brace counter on

@@ -253,15 +253,6 @@ The LLM section is the only caller of a single Scanner across newlines
 today, so a multi-line `"..."` (legal but unusual) would mis-report the
 error line. Latent footgun for the next reuse.
 
-### `eat_inline_ws` ignores `\r` (CRLF files) — [bug-risk]
-
-`scanner.rs:84-92` only consumes `b' '` and `b'\t'`. CRLF-line-ending
-`.syara` files leave `\r` as a non-whitespace byte. `consume_kv_value`'s
-bareword loop stops at `\r` (it checks `is_ascii_whitespace`), but
-`collect_modifiers`'s newline-or-end check
-(`sections.rs:355-359`) doesn't peek past `\r` to see `\n`. No CRLF
-test in the suite — would be a one-line fixture.
-
 ### `idx + 1` is "section-relative" line number — [design]
 
 Per-line section parsers pass `Scanner::new(line, idx + 1)`. So an error
