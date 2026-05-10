@@ -527,6 +527,99 @@ mod tests {
         }
     }
 
+    /// Parity invariant for quoted strings: the scanner's quoted-string
+    /// end position must match `parser/mod.rs::split_rules`'s
+    /// single-quote string-consumption arm (lines 210-221). If they
+    /// diverge, a `}` inside a string body could be counted by the
+    /// brace counter while the scanner correctly classifies it as
+    /// literal content — a rule-split-corruption bug.
+    #[test]
+    fn parity_with_split_rules_string_consumption() {
+        let fixtures = [
+            r#""hello""#,
+            r#""say \"hi\"""#,
+            r#""path\\to\\file""#,
+            r#""contains / slash""#,
+            r#""contains } closing brace""#,
+            r#""contains { opening brace""#,
+            r#""contains // comment chars""#,
+            r#""contains /* block */ chars""#,
+            r#""""#, // empty body
+        ];
+        for f in fixtures {
+            let mut s = Scanner::new(f, 1);
+            s.consume_quoted_string()
+                .unwrap_or_else(|e| panic!("scanner failed on {f:?}: {e}"));
+            let scanner_end = s.pos();
+
+            // Mirror split_rules' single-quote string consumption
+            // (parser/mod.rs:210-221).
+            let bytes = f.as_bytes();
+            assert_eq!(bytes[0], b'"');
+            let mut j = 1;
+            while j < bytes.len() {
+                if bytes[j] == b'\\' {
+                    j += 2;
+                    continue;
+                }
+                if bytes[j] == b'"' {
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            assert_eq!(scanner_end, j, "parity divergence for {f:?}");
+        }
+    }
+
+    /// Parity invariant for triple-quoted strings: the scanner's
+    /// triple-quote end position must match `parser/mod.rs::split_rules`'s
+    /// triple-quote arm (lines 195-209). Embedded `{`, `}`, `"`,
+    /// `//`, and `/*` inside a triple-quoted body must be classified
+    /// the same way across layers.
+    #[test]
+    fn parity_with_split_rules_triple_quote_consumption() {
+        let fixtures = [
+            "\"\"\"abc\"\"\"",
+            "\"\"\"\"\"\"", // empty body
+            "\"\"\"contains } brace\"\"\"",
+            "\"\"\"contains { brace\"\"\"",
+            "\"\"\"contains // not a comment\"\"\"",
+            "\"\"\"contains /* not a block */\"\"\"",
+            "\"\"\"contains \"single\" quote\"\"\"",
+            "\"\"\"multi\nline\nbody\"\"\"",
+        ];
+        for f in fixtures {
+            let mut s = Scanner::new(f, 1);
+            s.consume_triple_quoted_string()
+                .unwrap_or_else(|e| panic!("scanner failed on {f:?}: {e}"));
+            let scanner_end = s.pos();
+
+            // Mirror split_rules' triple-quote consumption
+            // (parser/mod.rs:195-209). Body is consumed byte-by-byte
+            // until the next `"""` triple is found.
+            let bytes = f.as_bytes();
+            let n = bytes.len();
+            assert!(
+                n >= 3 && &bytes[0..3] == b"\"\"\"",
+                "fixture must open with triple quote: {f:?}"
+            );
+            let mut j = 3;
+            while j < n {
+                if j + 2 < n
+                    && bytes[j] == b'"'
+                    && bytes[j + 1] == b'"'
+                    && bytes[j + 2] == b'"'
+                {
+                    j += 3;
+                    break;
+                }
+                j += 1;
+            }
+            assert_eq!(scanner_end, j, "parity divergence for {f:?}");
+        }
+    }
+
     #[test]
     fn unescape_string_sequences() {
         assert_eq!(unescape_string(r#"hello"#), "hello");

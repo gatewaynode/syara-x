@@ -713,4 +713,158 @@ third line\"\"\"
             "parser truncated the regex body"
         );
     }
+
+    // ── Cross-layer parity: remove_comments must not strip comment-like ──
+    // ── byte sequences that appear inside literal bodies. Mirrors the   ──
+    // ── scanner ↔ split_rules parity tests (scanner.rs) for the third   ──
+    // ── state machine (`Mode::String` / `Mode::Regex` / `Mode::TripleString`).
+    //
+    // Each test exercises remove_comments (directly) AND parse_str
+    // (end-to-end) so a regression at either layer is caught.
+
+    /// `Mode::String` parity: `//` and `/* */` inside a quoted-string
+    /// body are content, not comment openers.
+    #[test]
+    fn test_string_body_preserves_comment_chars() {
+        let src = r#"
+        rule r {
+            strings:
+                $a = "see // not a comment and /* not a block */"
+            condition:
+                $a
+        }
+        "#;
+        let cleaned = remove_comments(src);
+        assert!(
+            cleaned.contains(r#""see // not a comment and /* not a block */""#),
+            "remove_comments stripped comment-chars from inside string body: {cleaned:?}"
+        );
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(
+            rules[0].strings[0].pattern,
+            "see // not a comment and /* not a block */"
+        );
+    }
+
+    /// `Mode::Regex` parity: `//` and `/* */` inside a regex body are
+    /// content, not comment openers.
+    #[test]
+    fn test_regex_body_preserves_comment_chars() {
+        let src = r#"
+        rule r {
+            strings:
+                $a = /https:\/\/[^\s]+\/\*nope\*\//i
+            condition:
+                $a
+        }
+        "#;
+        let cleaned = remove_comments(src);
+        assert!(
+            cleaned.contains(r"/https:\/\/[^\s]+\/\*nope\*\//i"),
+            "remove_comments stripped comment-chars from inside regex body: {cleaned:?}"
+        );
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(
+            rules[0].strings[0].pattern,
+            r"https:\/\/[^\s]+\/\*nope\*\/"
+        );
+    }
+
+    /// `Mode::TripleString` parity for `/* */` (extends the existing
+    /// `test_comment_stripper_preserves_triple_quote_body` which covers
+    /// `//`).
+    #[test]
+    fn test_triple_quote_body_preserves_block_comment_chars() {
+        let src = r#"
+        rule llm_block {
+            llm:
+                $p1 = """body /* with */ block-comment chars"""
+            condition:
+                $p1
+        }
+        "#;
+        let cleaned = remove_comments(src);
+        assert!(
+            cleaned.contains(r#""""body /* with */ block-comment chars""""#),
+            "remove_comments stripped /*…*/ from inside triple-quoted body: {cleaned:?}"
+        );
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(
+            rules[0].llm[0].pattern,
+            "body /* with */ block-comment chars"
+        );
+    }
+
+    // ── Cross-layer parity: split_rules brace counter must NOT count   ──
+    // ── `{` / `}` that appear inside a literal body. Companion to the  ──
+    // ── existing `test_parse_regex_with_quantifier` (which covers the  ──
+    // ── regex case via `{1,3}`).
+
+    /// `split_rules` single-quote arm parity: `}` inside a string body
+    /// must not decrement the brace counter.
+    #[test]
+    fn test_split_rules_treats_brace_inside_string_as_literal() {
+        let src = r#"
+        rule r {
+            strings:
+                $a = "contains } closing brace and { opening brace"
+            condition:
+                $a
+        }
+        "#;
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].strings[0].pattern,
+            "contains } closing brace and { opening brace"
+        );
+    }
+
+    /// `split_rules` triple-quote arm parity: `{` and `}` inside a
+    /// triple-quoted body must not be counted.
+    #[test]
+    fn test_split_rules_treats_braces_inside_triple_quote_as_literal() {
+        let src = r#"
+        rule r {
+            llm:
+                $a = """body with { and } braces inside"""
+            condition:
+                $a
+        }
+        "#;
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].llm[0].pattern,
+            "body with { and } braces inside"
+        );
+    }
+
+    /// `split_rules` two-rule split with brace inside literal: the
+    /// inner `}` must not split the first rule prematurely. If
+    /// split_rules' string arm disagreed with the brace counter on
+    /// what's "inside" a literal, this would produce one giant
+    /// malformed block instead of two clean rules.
+    #[test]
+    fn test_split_rules_two_rules_with_brace_in_string_body() {
+        let src = r#"
+        rule first {
+            strings:
+                $a = "has } brace"
+            condition:
+                $a
+        }
+        rule second {
+            strings:
+                $b = "no brace"
+            condition:
+                $b
+        }
+        "#;
+        let rules = SyaraParser::new().parse_str(src).unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].name, "first");
+        assert_eq!(rules[1].name, "second");
+        assert_eq!(rules[0].strings[0].pattern, "has } brace");
+    }
 }
