@@ -240,19 +240,6 @@ maintained state machines vs. one shared lexer crate-internal helper.
 The parity tests pin behavioral agreement so the consolidation can
 proceed safely.
 
-### Asymmetric line tracking across `consume_*` methods — [bug-risk]
-
-| Method | Tracks `\n`? | scanner.rs |
-|---|---|---|
-| `consume_triple_quoted_string` | yes | 191-211 |
-| `consume_quoted_string` | **no** | 135-185 |
-| `consume_regex_literal` | **no** | 218-247 |
-| `bump()` | yes | 67-74 |
-
-The LLM section is the only caller of a single Scanner across newlines
-today, so a multi-line `"..."` (legal but unusual) would mis-report the
-error line. Latent footgun for the next reuse.
-
 ### `idx + 1` is "section-relative" line number — [design]
 
 Per-line section parsers pass `Scanner::new(line, idx + 1)`. So an error

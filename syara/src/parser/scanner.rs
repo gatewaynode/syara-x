@@ -189,9 +189,9 @@ impl<'a> Scanner<'a> {
                         Some(_) => {
                             // Unknown escape: preserve `\` + next char raw.
                             out.push('\\');
-                            let ch_end = self.next_char_end();
-                            out.push_str(&self.src[self.pos..ch_end]);
-                            self.pos = ch_end;
+                            let ch_start = self.pos;
+                            self.bump();
+                            out.push_str(&self.src[ch_start..self.pos]);
                         }
                         None => {
                             out.push('\\');
@@ -200,9 +200,9 @@ impl<'a> Scanner<'a> {
                     }
                 }
                 _ => {
-                    let ch_end = self.next_char_end();
-                    out.push_str(&self.src[self.pos..ch_end]);
-                    self.pos = ch_end;
+                    let ch_start = self.pos;
+                    self.bump();
+                    out.push_str(&self.src[ch_start..self.pos]);
                 }
             }
         }
@@ -224,11 +224,7 @@ impl<'a> Scanner<'a> {
                 self.pos += 3;
                 return Ok(body);
             }
-            if self.peek_byte() == Some(b'\n') {
-                self.line += 1;
-            }
-            let ch_end = self.next_char_end();
-            self.pos = ch_end;
+            self.bump();
         }
         Err(self.err("unterminated triple-quoted string"))
     }
@@ -251,18 +247,20 @@ impl<'a> Scanner<'a> {
                 }
                 b'\\' => {
                     // Eat `\` + next char without interpreting (regex
-                    // engine handles the escape semantics later).
+                    // engine handles the escape semantics later). The
+                    // `\` itself is ASCII so a raw `pos += 1` is fine;
+                    // the second char is routed through `bump()` so a
+                    // literal `\n` after the backslash still advances
+                    // `line`.
                     self.pos += 1;
                     if self.pos < self.src.len() {
-                        let ch_end = self.next_char_end();
-                        self.pos = ch_end;
+                        self.bump();
                     } else {
                         return Err(self.err("trailing backslash in regex literal"));
                     }
                 }
                 _ => {
-                    let ch_end = self.next_char_end();
-                    self.pos = ch_end;
+                    self.bump();
                 }
             }
         }
@@ -560,6 +558,68 @@ mod tests {
         s.pos = "nocase".len();
         s.eat_inline_ws();
         assert_eq!(s.peek_byte(), Some(b'\n'));
+    }
+
+    /// Line tracking parity: every `consume_*` method that can advance
+    /// past a `\n` (quoted string, regex literal, triple-quoted string)
+    /// must increment `line`. Latent for the LLM-stream parser, which
+    /// holds a single Scanner across newlines — without this, an error
+    /// after a multi-line literal would report the wrong source line.
+    #[test]
+    fn quoted_string_tracks_line_with_embedded_newline() {
+        let src = "\"line1\nline2\nline3\"";
+        let mut s = Scanner::new(src, 1);
+        assert_eq!(s.consume_quoted_string().unwrap(), "line1\nline2\nline3");
+        assert_eq!(s.line(), 3);
+    }
+
+    #[test]
+    fn quoted_string_tracks_line_through_unknown_escape_newline() {
+        // `\` followed by a literal newline (unknown-escape passthrough).
+        let src = "\"\\\nrest\"";
+        let mut s = Scanner::new(src, 1);
+        assert_eq!(s.consume_quoted_string().unwrap(), "\\\nrest");
+        assert_eq!(s.line(), 2);
+    }
+
+    #[test]
+    fn regex_literal_tracks_line_with_embedded_newline() {
+        let src = "/line1\nline2/";
+        let mut s = Scanner::new(src, 1);
+        let (body, _) = s.consume_regex_literal().unwrap();
+        assert_eq!(body, "line1\nline2");
+        assert_eq!(s.line(), 2);
+    }
+
+    #[test]
+    fn regex_literal_tracks_line_through_backslash_newline() {
+        // `\` followed by literal `\n` in source: the second char of the
+        // escape pair is a newline. The `\` itself is ASCII (no line
+        // bump), but the next-char step must increment `line`.
+        let src = "/foo\\\nbar/";
+        let mut s = Scanner::new(src, 1);
+        let (body, _) = s.consume_regex_literal().unwrap();
+        assert_eq!(body, "foo\\\nbar");
+        assert_eq!(s.line(), 2);
+    }
+
+    /// End-to-end: an unterminated literal that follows a multi-line
+    /// quoted body must report the post-newline line number, not the
+    /// line where the first body started.
+    #[test]
+    fn error_after_multiline_quoted_body_reports_correct_line() {
+        // First a multi-line quoted body, then an unterminated regex.
+        let src = "\"a\nb\nc\" /unclosed";
+        let mut s = Scanner::new(src, 1);
+        s.consume_quoted_string().unwrap();
+        assert_eq!(s.line(), 3);
+        s.eat_inline_ws();
+        let err = s.consume_regex_literal().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("line 3"),
+            "expected error to report line 3, got: {msg}"
+        );
     }
 
     #[test]
